@@ -1,0 +1,106 @@
+import uuid
+
+from PySide6.QtCore import QObject, Signal
+
+from models.device import DeviceModel
+from models.enums import DeviceType
+from models.scenario import ScenarioModel
+from services.naming_service import NamingService
+from services.scene_transform import SceneTransform
+from services.selection_service import SelectionService
+
+
+class ScenarioService(QObject):
+    scenario_replaced = Signal()
+    device_added = Signal(object)
+    device_updated = Signal(object)
+    device_removed = Signal(str)
+    summary_changed = Signal()
+
+    def __init__(
+        self,
+        naming_service: NamingService,
+        selection_service: SelectionService,
+        transform: SceneTransform,
+    ) -> None:
+        super().__init__()
+        self.naming_service = naming_service
+        self.selection_service = selection_service
+        self.transform = transform
+        self.scenario = ScenarioModel()
+
+    def list_devices(self) -> list[DeviceModel]:
+        return list(self.scenario.devices)
+
+    def get_device(self, device_id: str | None) -> DeviceModel | None:
+        if device_id is None:
+            return None
+        for device in self.scenario.devices:
+            if device.id == device_id:
+                return device
+        return None
+
+    def add_device(self, device_type: DeviceType, x_m: float, y_m: float) -> DeviceModel:
+        x_m, y_m = self.transform.clamp_world(self.scenario, x_m, y_m)
+        device = DeviceModel(
+            id=uuid.uuid4().hex,
+            name=self.naming_service.next_name(device_type),
+            device_type=device_type,
+            x_m=x_m,
+            y_m=y_m,
+        )
+        self.scenario.devices.append(device)
+        self.selection_service.set_selected_device_id(device.id)
+        self.device_added.emit(device)
+        self.summary_changed.emit()
+        return device
+
+    def move_device(self, device_id: str, x_m: float, y_m: float) -> DeviceModel | None:
+        device = self.get_device(device_id)
+        if device is None:
+            return None
+        device.x_m, device.y_m = self.transform.clamp_world(self.scenario, x_m, y_m)
+        self.device_updated.emit(device)
+        return device
+
+    def nudge_device(self, device_id: str, dx_m: float, dy_m: float) -> DeviceModel | None:
+        device = self.get_device(device_id)
+        if device is None:
+            return None
+        return self.move_device(device_id, device.x_m + dx_m, device.y_m + dy_m)
+
+    def rename_device(self, device_id: str, new_name: str) -> DeviceModel | None:
+        device = self.get_device(device_id)
+        if device is None:
+            return None
+        stripped = new_name.strip()
+        if not stripped:
+            return device
+        device.name = stripped
+        self.device_updated.emit(device)
+        self.summary_changed.emit()
+        return device
+
+    def update_device_position_fields(self, device_id: str, x_m: float, y_m: float) -> DeviceModel | None:
+        return self.move_device(device_id, x_m, y_m)
+
+    def delete_selected_device(self) -> bool:
+        device_id = self.selection_service.selected_device_id
+        if device_id is None:
+            return False
+        for index, device in enumerate(self.scenario.devices):
+            if device.id == device_id:
+                del self.scenario.devices[index]
+                self.selection_service.set_selected_device_id(None)
+                self.device_removed.emit(device_id)
+                self.summary_changed.emit()
+                return True
+        self.selection_service.set_selected_device_id(None)
+        return False
+
+    def replace_scenario(self, scenario: ScenarioModel) -> None:
+        self.scenario = scenario
+        self.naming_service.sync_from_devices(self.scenario.devices)
+        self.selection_service.set_selected_device_id(None)
+        self.scenario_replaced.emit()
+        self.summary_changed.emit()
