@@ -12,6 +12,9 @@ class JsonScenarioRepository:
 
     def load(self, path: str) -> tuple[int, ScenarioModel]:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return self.load_from_payload(payload)
+
+    def load_from_payload(self, payload: dict) -> tuple[int, ScenarioModel]:
         schema_version, dto = ScenarioDTO.from_payload(payload)
         return schema_version, dto.to_model()
 
