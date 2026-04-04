@@ -1,66 +1,97 @@
 # Network Planner
 
 ## Project Purpose
-Network Planner is a short-term research desktop tool for interactively planning ns-3 Wi-Fi 7 scenarios. Phase A focuses on the GUI interaction foundation only: placing devices on a 2D scene, editing their basic properties, and saving/loading the scenario state.
+Network Planner is a desktop research tool for interactively planning ns-3 Wi-Fi scenarios.
+It lets you place APs and STAs on a 2D canvas, configure wireless parameters, and instantly see
+link-level relations (distance, path loss, RSSI, SNR) for the selected device.
+The scenario is stored as JSON and is designed to feed an ns-3 export adapter in a later phase.
+
+---
 
 ## Folder Structure
 ```text
 Network-Planner/
-  main.py
-  app.py
+  main.py               — entry point
+  app.py                — dependency wiring
   requirements.txt
-  README.md
-  models/
-  services/
-  graphics/
-  ui/
-  storage/
-  adapters/
+  models/               — pure data models (no Qt)
+  services/             — business logic and calculation services
+  graphics/             — PySide6 canvas items and scene
+  ui/                   — Qt widgets, panels, and tabs
+  storage/              — JSON DTO and repository
+  adapters/             — ns-3 export (Phase C skeleton)
+  tests/                — unittest suite
+  docs/                 — handoff documents
+  .claude_project/      — agent plan and decision log
 ```
 
-## Create a Virtual Environment
+---
+
+## Setup
+
 ### PowerShell
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-```
-
-## Install Dependencies
-```powershell
 pip install -r requirements.txt
-```
-
-## Run the App
-```powershell
 python main.py
 ```
 
-## Current Phase A Scope
+---
+
+## Phase A — GUI Foundation (complete)
 - PySide6 desktop application bootstrap
-- Main window with left palette, center canvas, right property panel, and status bar
-- 2D scene with world coordinates in meters
-- Bottom-left origin with Y axis increasing upward
-- Grid and coordinate reference
-- AP and STA device placement
-- Click-add at viewport center
-- Drag-drop onto the canvas
-- Device selection, dragging, keyboard fine-tuning, and Delete removal
-- Device basic property editing
-- JSON save/load with a root `schema_version`
+- Main window: left palette, center canvas, right property panel, status bar
+- 2D scene with world coordinates in metres, bottom-left origin, Y-up
+- AP and STA device placement (click-add and drag-drop)
+- Device selection, dragging, keyboard fine-tuning (`Arrow` / `Shift+Arrow` / `Ctrl+Arrow`), Delete removal
+- Device basic property editing (name, position)
+- JSON save / load (`schema_version: 1`)
+- Adaptive grid with zoom/pan
 
-## Placeholder For Phase B
-- Wi-Fi and link metrics
-- Relations table live calculations
-- ns-3 export implementation
-- Advanced environment modeling
-- Simulation-derived summaries and validation
+---
 
-## Phase A Manual Validation Checklist
-- Palette click-add: click `Add AP` and `Add STA`, confirm new devices appear at the current viewport center.
-- Palette drag-drop: drag AP/STA from the palette into the canvas and confirm the device is placed at the drop location.
-- Selection and property binding: select a device, confirm the `Device Basic` tab updates, then rename or edit coordinates and confirm the canvas updates.
-- Keyboard nudging: with a device selected, test `Arrow`, `Shift + Arrow`, and `Ctrl + Arrow`.
-- Delete selected device: select a device, press `Delete`, and confirm the item, property panel state, and status bar selection update correctly.
-- Zoom and pan: test `Ctrl + mouse wheel` for zoom and middle mouse drag for pan; plain wheel should keep normal scrolling behavior.
-- Save/load JSON: save a scenario, reload it, and confirm devices and names are restored correctly.
-- Bottom-left origin and Y-up: move a device upward on screen and confirm its world Y value increases; verify `(0,0)` is the bottom-left world origin.
+## Phase B — Calculation Layer & UI Vertical Slice (complete)
+
+### New capabilities
+- **Wi-Fi / Link tab**: edit TX power (dBm), manage per-device links (name, enabled, band)
+- **Environment tab**: edit path-loss exponent, reference distance, noise floor, band profiles (2.4 / 5 / 6 GHz)
+- **Relations tab**: live peer summary table + link detail table for the selected device
+  - Columns: distance, link count, best RSSI, best SNR, status
+  - Per-link: band, selected link name, peer link name, freq (MHz), path loss, RSSI, SNR, status
+- Recalculation triggered by: selection change, device move, environment edit, radio/link edit, scenario load
+- JSON schema upgraded to **v2** (v1 files still load with synthesised defaults)
+- Log-Distance propagation model (path loss, RSSI, SNR)
+- Multi-link support per device (same-band enabled pairs only)
+
+### Schema change
+`schema_version` is now `2`. Old `v1` files load cleanly; new v2 fields are synthesised from defaults.
+
+---
+
+## Phase B Manual Validation Checklist
+Run with `.venv\Scripts\python.exe main.py` on Windows.
+
+1. **App launches** — no errors in console, all four property panel tabs visible
+2. **Phase A interactions still work** — add/drag/nudge/delete/zoom/pan/save/load
+3. **Select a device** — Wi-Fi tab shows its TX power and links; Relations tab shows peer rows
+4. **Move a device** — distance / RSSI / SNR values in Relations tab update live
+5. **Edit environment values** — change path-loss exponent → Relations tab values change
+6. **Disable a link** — uncheck a link in Wi-Fi tab → that band disappears from Relations tab
+7. **Mismatched bands** — if selected device has only 5 GHz enabled but peer only 2.4 GHz, Relations tab shows "No same-band enabled links"
+8. **Save / Load v2** — save a scenario, reload it, confirm TX power, links, and environment values are preserved
+9. **Load old v1 JSON** — load a Phase A saved file, confirm it opens and Phase B defaults are synthesised
+
+---
+
+## Phase C — ns-3 Export (planned)
+Export the planned scenario to ns-3 C++ / Python script format.
+Skeleton exists at `adapters/ns3_scenario_adapter.py`.
+
+---
+
+## Automated Tests
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+```
+Tests cover: propagation calculator, relation calculation service, schema v1/v2 round-trip.

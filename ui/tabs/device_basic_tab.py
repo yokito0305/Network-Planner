@@ -29,20 +29,29 @@ class DeviceBasicTab(QWidget):
         self.y_edit.editingFinished.connect(self._emit_position_changed)
 
     def set_device(self, device: DeviceModel | None) -> None:
-        self._device_id = None if device is None else device.id
-        enabled = device is not None
+        # Block editingFinished to prevent cascading signals during
+        # programmatic updates (avoids crash when focus shifts away from
+        # a QLineEdit right before a node-list click rebuilds items).
         for widget in (self.name_edit, self.x_edit, self.y_edit):
-            widget.setEnabled(enabled)
-        if device is None:
-            self.name_edit.setText("")
-            self.type_edit.setText("")
-            self.x_edit.setText("")
-            self.y_edit.setText("")
-            return
-        self.name_edit.setText(device.name)
-        self.type_edit.setText(device.device_type.value)
-        self.x_edit.setText(f"{device.x_m:.2f}")
-        self.y_edit.setText(f"{device.y_m:.2f}")
+            widget.blockSignals(True)
+        try:
+            self._device_id = None if device is None else device.id
+            enabled = device is not None
+            for widget in (self.name_edit, self.x_edit, self.y_edit):
+                widget.setEnabled(enabled)
+            if device is None:
+                self.name_edit.setText("")
+                self.type_edit.setText("")
+                self.x_edit.setText("")
+                self.y_edit.setText("")
+                return
+            self.name_edit.setText(device.name)
+            self.type_edit.setText(device.device_type.value)
+            self.x_edit.setText(f"{device.x_m:.2f}")
+            self.y_edit.setText(f"{device.y_m:.2f}")
+        finally:
+            for widget in (self.name_edit, self.x_edit, self.y_edit):
+                widget.blockSignals(False)
 
     def _emit_name_changed(self) -> None:
         if self._device_id is None:

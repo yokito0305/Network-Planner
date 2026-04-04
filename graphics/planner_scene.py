@@ -1,5 +1,7 @@
+import math
+
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QGraphicsScene
 
 from graphics.device_item import DeviceItem
@@ -66,39 +68,132 @@ class PlannerScene(QGraphicsScene):
         self.mouse_world_changed.emit(x_m, y_m)
         super().mouseMoveEvent(event)
 
-    def drawBackground(self, painter: QPainter, rect) -> None:
-        del rect
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         scene_rect = self.sceneRect()
         painter.fillRect(scene_rect, QColor("#F8FAFC"))
         scenario = self.scenario_service.scenario
-        grid_pen = QPen(QColor("#E2E8F0"))
+
+        # Adaptive grid: choose spacing based on current pixels-per-metre scale
+        scale = painter.transform().m11()
+        grid_m = self._grid_spacing_m(scale)
+
+        # Lighter, semi-transparent grid lines (alpha=90/255 ≈ 35%)
+        grid_color = QColor(200, 212, 228, 90)
+        grid_pen = QPen(grid_color)
+        grid_pen.setCosmetic(True)     # always exactly 1 screen-pixel wide
         axis_pen = QPen(QColor("#94A3B8"), 0.7)
 
-        painter.setPen(grid_pen)
-        for x in range(0, int(scenario.width_m) + 1, 10):
-            painter.drawLine(x, 0, x, scenario.height_m)
-        for y in range(0, int(scenario.height_m) + 1, 10):
-            painter.drawLine(0, y, scenario.width_m, y)
+        # Clip drawing region to visible area intersected with scene bounds
+        clip = scene_rect.intersected(rect)
+        x0, x1 = clip.left(), clip.right()
+        y0, y1 = clip.top(), clip.bottom()
 
-        painter.setPen(axis_pen)
+        painter.setPen(grid_pen)
+
+        # Vertical lines — only those visible in current viewport
+        vx = math.floor(x0 / grid_m) * grid_m
+        while vx <= x1 + 1e-9:
+            if 0.0 <= vx <= scenario.width_m:
+                painter.drawLine(QPointF(vx, 0.0), QPointF(vx, scenario.height_m))
+            vx += grid_m
+
+        # Horizontal lines — only those visible in current viewport
+        vy = math.floor(y0 / grid_m) * grid_m
+        while vy <= y1 + 1e-9:
+            if 0.0 <= vy <= scenario.height_m:
+                painter.drawLine(QPointF(0.0, vy), QPointF(scenario.width_m, vy))
+            vy += grid_m
+
+        # Border rect — cosmetic so it stays 1 px regardless of zoom
+        border_pen = QPen(QColor("#94A3B8"))
+        border_pen.setCosmetic(True)
+        painter.setPen(border_pen)
         painter.drawRect(scene_rect)
 
-        inset = 4.0
+        # ── Axis labels & arrows in device (screen-pixel) coordinates ─────
+        # Map the four scene corners to screen pixels, then reset transform
+        # so text and arrows stay a fixed size regardless of zoom.
+        xf = painter.transform()
+        bl = xf.map(QPointF(scene_rect.left(),  scene_rect.bottom()))  # (0,0) origin
+        br = xf.map(QPointF(scene_rect.right(), scene_rect.bottom()))  # +X corner
+        tl = xf.map(QPointF(scene_rect.left(),  scene_rect.top()))     # +Y corner
+
+        painter.save()
+        painter.resetTransform()
+
+        label_pen = QPen(QColor("#64748B"))
+        label_pen.setCosmetic(True)
+        painter.setPen(label_pen)
+
+        inset = 5
+        lh = 13   # label height in pixels
+
+        # (0,0) — bottom-left
         painter.drawText(
-            QRectF(inset, scene_rect.bottom() - 18.0, 48.0, 14.0),
+            QRectF(bl.x() + inset, bl.y() - lh - inset, 52, lh),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             "(0,0)",
         )
+
+        # X label + right-pointing arrow — bottom-right
+        arrow_len = 18
+        ax = br.x() - inset
+        ay = br.y() - lh / 2 - inset
+        painter.drawLine(QPointF(ax - arrow_len, ay), QPointF(ax, ay))
+        painter.drawPolygon(QPolygonF([
+            QPointF(ax,       ay),
+            QPointF(ax - 6,   ay - 3),
+            QPointF(ax - 6,   ay + 3),
+        ]))
         painter.drawText(
-            QRectF(scene_rect.right() - 52.0, scene_rect.bottom() - 18.0, 48.0, 14.0),
+            QRectF(br.x() - 60, br.y() - lh - inset, 38, lh),
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            f"X:{scenario.width_m:.0f}",
+            f"X  {scenario.width_m:.0f} m",
         )
+
+        # Y label + up-pointing arrow — top-left
+        ay2 = tl.y() + inset
+        ax2 = tl.x() + inset + lh / 2
+        painter.drawLine(QPointF(ax2, ay2 + arrow_len), QPointF(ax2, ay2))
+        painter.drawPolygon(QPolygonF([
+            QPointF(ax2,     ay2),
+            QPointF(ax2 - 3, ay2 + 6),
+            QPointF(ax2 + 3, ay2 + 6),
+        ]))
         painter.drawText(
-            QRectF(inset, inset, 52.0, 14.0),
+            QRectF(tl.x() + inset, tl.y() + arrow_len + inset + 2, 72, lh),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            f"Y:{scenario.height_m:.0f}",
+            f"Y  {scenario.height_m:.0f} m",
         )
+
+        painter.restore()
+
+    @staticmethod
+    def _grid_spacing_m(scale: float) -> float:
+        """Choose grid spacing in metres based on pixels-per-metre scale.
+
+        Finer steps than Phase A to give a denser, more readable grid:
+          scale > 200 px/m → 0.5 m
+          scale > 100       → 1 m
+          scale > 40        → 2 m
+          scale > 15        → 5 m
+          scale >  5        → 10 m
+          scale >  2        → 25 m
+          else              → 50 m
+        """
+        if scale > 200:
+            return 0.5
+        if scale > 100:
+            return 1.0
+        if scale > 40:
+            return 2.0
+        if scale > 15:
+            return 5.0
+        if scale > 5:
+            return 10.0
+        if scale > 2:
+            return 25.0
+        return 50.0
 
     def _create_item(self, device: DeviceModel) -> DeviceItem:
         item = DeviceItem(device)

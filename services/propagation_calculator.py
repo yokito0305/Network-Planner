@@ -28,3 +28,18 @@ class PropagationCalculator:
     @staticmethod
     def compute_snr_db(rssi_dbm: float, noise_floor_dbm: float) -> float:
         return rssi_dbm - noise_floor_dbm
+
+    @staticmethod
+    def compute_sinr_db(
+        rssi_dbm: float,
+        interference_rssi_dbm: list[float],
+        noise_floor_dbm: float,
+    ) -> float:
+        """SINR = Signal / (Interference + Noise), returned in dB.
+
+        When *interference_rssi_dbm* is empty, result equals SNR.
+        """
+        signal_mw = 10.0 ** (rssi_dbm / 10.0)
+        noise_mw = 10.0 ** (noise_floor_dbm / 10.0)
+        interf_mw = sum(10.0 ** (r / 10.0) for r in interference_rssi_dbm)
+        return 10.0 * math.log10(signal_mw / (interf_mw + noise_mw))

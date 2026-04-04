@@ -1,5 +1,6 @@
 from models.device import DeviceModel
 from models.environment import BandProfileModel
+from models.enums import BandId
 from models.relations import LinkRelationModel, PeerRelationModel, RelationsSnapshotModel
 from models.scenario import ScenarioModel
 from services.propagation_calculator import PropagationCalculator
@@ -37,6 +38,14 @@ class RelationCalculationService:
             peer_device.x_m,
             peer_device.y_m,
         )
+
+        # Identify potential interferers: all devices that are neither the
+        # selected device nor the current peer device.
+        interferers = [
+            d for d in scenario.devices
+            if d.id != selected_device.id and d.id != peer_device.id
+        ]
+
         links: list[LinkRelationModel] = []
         for selected_link in selected_device.radio.links:
             if not selected_link.enabled:
@@ -44,7 +53,14 @@ class RelationCalculationService:
             for peer_link in peer_device.radio.links:
                 if not peer_link.enabled or peer_link.band != selected_link.band:
                     continue
+
                 band_profile = self._get_band_profile(scenario, selected_link.band)
+                noise_floor_dbm = (
+                    band_profile.noise_floor_dbm
+                    if band_profile.noise_floor_dbm is not None
+                    else scenario.environment.default_noise_floor_dbm
+                )
+
                 path_loss_db = self.propagation_calculator.compute_path_loss_db(
                     distance_m=distance_m,
                     reference_distance_m=scenario.environment.reference_distance_m,
@@ -57,12 +73,39 @@ class RelationCalculationService:
                     tx_gain_dbi=selected_device.radio.tx_antenna_gain_dbi,
                     rx_gain_dbi=peer_device.radio.rx_antenna_gain_dbi,
                 )
-                noise_floor_dbm = (
-                    band_profile.noise_floor_dbm
-                    if band_profile.noise_floor_dbm is not None
-                    else scenario.environment.default_noise_floor_dbm
-                )
                 snr_db = self.propagation_calculator.compute_snr_db(rssi_dbm, noise_floor_dbm)
+
+                # ── SINR: gather interference from other transmitters on the
+                #    same band arriving at the peer device's location ─────────
+                interference_rssi: list[float] = []
+                for interferer in interferers:
+                    if not any(
+                        lnk.enabled and lnk.band == selected_link.band
+                        for lnk in interferer.radio.links
+                    ):
+                        continue
+                    dist_i = self.propagation_calculator.compute_distance_m(
+                        interferer.x_m, interferer.y_m,
+                        peer_device.x_m, peer_device.y_m,
+                    )
+                    pl_i = self.propagation_calculator.compute_path_loss_db(
+                        distance_m=dist_i,
+                        reference_distance_m=scenario.environment.reference_distance_m,
+                        reference_loss_db=band_profile.reference_loss_db,
+                        exponent=scenario.environment.path_loss_exponent,
+                    )
+                    rssi_i = self.propagation_calculator.compute_rssi_dbm(
+                        tx_power_dbm=interferer.radio.tx_power_dbm,
+                        path_loss_db=pl_i,
+                        tx_gain_dbi=interferer.radio.tx_antenna_gain_dbi,
+                        rx_gain_dbi=peer_device.radio.rx_antenna_gain_dbi,
+                    )
+                    interference_rssi.append(rssi_i)
+
+                sinr_db = self.propagation_calculator.compute_sinr_db(
+                    rssi_dbm, interference_rssi, noise_floor_dbm
+                )
+
                 links.append(
                     LinkRelationModel(
                         selected_link_id=selected_link.link_id,
@@ -75,6 +118,7 @@ class RelationCalculationService:
                         path_loss_db=path_loss_db,
                         rssi_dbm=rssi_dbm,
                         snr_db=snr_db,
+                        sinr_db=sinr_db,
                         status="paired",
                         note="Selected to peer, same-band enabled link pair",
                     )
@@ -90,6 +134,7 @@ class RelationCalculationService:
             best_band=None if best_link is None else best_link.band,
             best_rssi_dbm=None if best_link is None else best_link.rssi_dbm,
             best_snr_db=None if best_link is None else best_link.snr_db,
+            best_sinr_db=None if best_link is None else best_link.sinr_db,
             status_summary="No same-band enabled links" if best_link is None else "OK",
             links=links,
         )
@@ -104,7 +149,7 @@ class RelationCalculationService:
         return None
 
     @staticmethod
-    def _get_band_profile(scenario: ScenarioModel, band) -> BandProfileModel:
+    def _get_band_profile(scenario: ScenarioModel, band: BandId) -> BandProfileModel:
         for band_profile in scenario.environment.band_profiles:
             if band_profile.band == band:
                 return band_profile

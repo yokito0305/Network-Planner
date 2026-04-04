@@ -3,6 +3,7 @@ from PySide6.QtGui import QColor, QDrag, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 from models.enums import DeviceType
+from ui.node_list_panel import NodeListPanel
 
 
 class PaletteButton(QLabel):
@@ -98,4 +99,7 @@ class LeftPalette(QWidget):
         hint = QLabel("Click to add at viewport center.\nDrag into canvas to place directly.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        layout.addStretch(1)
+
+        # ── Node list (lower section) ──────────────────────────────────────
+        self.node_list = NodeListPanel()
+        layout.addWidget(self.node_list, stretch=1)

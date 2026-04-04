@@ -15,6 +15,7 @@ class LinkRelationModel:
     path_loss_db: float
     rssi_dbm: float
     snr_db: float
+    sinr_db: float          # Signal / (Interference + Noise); equals SNR when no interferers
     status: str
     note: str
 
@@ -29,6 +30,7 @@ class PeerRelationModel:
     best_band: BandId | None
     best_rssi_dbm: float | None
     best_snr_db: float | None
+    best_sinr_db: float | None  # SINR of the same best link
     status_summary: str
     links: list[LinkRelationModel] = field(default_factory=list)
 
