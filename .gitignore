@@ -30,6 +30,7 @@ htmlcov/
 git_patch/
 docs/
 .claude_project/
+bin/
 
 # IDE and editor settings
 .vscode/

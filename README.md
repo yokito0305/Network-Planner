@@ -37,6 +37,15 @@ pip install -r requirements.txt
 python main.py
 ```
 
+### Build EXE (Windows)
+```powershell
+.\build.ps1
+```
+
+Output layout:
+- `bin/NetworkPlanner.exe`
+- `bin/lib/*`
+
 ---
 
 ## Phase A — GUI Foundation (complete)

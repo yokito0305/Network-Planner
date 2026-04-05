@@ -11,7 +11,11 @@ from ui.main_window import MainWindow
 
 
 def create_app() -> QApplication:
-    app = QApplication.instance() or QApplication([])
+    existing_app = QApplication.instance()
+    if isinstance(existing_app, QApplication):
+        app = existing_app
+    else:
+        app = QApplication([])
     app.setApplicationName("Network Planner")
 
     transform = SceneTransform()
