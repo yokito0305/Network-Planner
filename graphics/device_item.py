@@ -16,6 +16,8 @@ class DeviceItem(QGraphicsObject):
         self._radius = radius
         self._name = device.name
         self._device_type = device.device_type
+        self._x_m = device.x_m
+        self._y_m = device.y_m
         self._label_mode = "selected_only"
         self.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -94,6 +96,8 @@ class DeviceItem(QGraphicsObject):
     def sync_from_device(self, device: DeviceModel) -> None:
         self._name = device.name
         self._device_type = device.device_type
+        self._x_m = device.x_m
+        self._y_m = device.y_m
         self._update_tooltip()
         self.update()
 
@@ -109,5 +113,9 @@ class DeviceItem(QGraphicsObject):
         return self.isSelected()
 
     def _update_tooltip(self) -> None:
-        self.setToolTip(f"{self._name}\nType: {self._device_type.value}")
+        self.setToolTip(
+            f"{self._name}\n"
+            f"Type: {self._device_type.value}\n"
+            f"({self._x_m:.2f} m, {self._y_m:.2f} m)"
+        )
         self.update()

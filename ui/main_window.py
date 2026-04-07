@@ -72,11 +72,11 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.panel)
 
         # Initial sizes: palette 180, canvas fills remaining, panel 360
-        splitter.setSizes([180, 860, 360])
+        splitter.setSizes([150, 820, 430])
 
         # Allow the canvas to expand freely; palette/panel have min widths
         self.palette.setMinimumWidth(120)
-        self.panel.setMinimumWidth(240)
+        self.panel.setMinimumWidth(380)
         splitter.setStretchFactor(0, 0)   # palette — don't stretch
         splitter.setStretchFactor(1, 1)   # canvas  — absorb extra space
         splitter.setStretchFactor(2, 0)   # panel   — don't stretch
@@ -169,6 +169,9 @@ class MainWindow(QMainWindow):
         self.panel.wifi_tab.link_name_changed.connect(self._on_link_name_changed)
         self.panel.wifi_tab.link_enabled_changed.connect(self._on_link_enabled_changed)
         self.panel.wifi_tab.link_band_changed.connect(self._on_link_band_changed)
+
+        # ── Calculator tab: add node from coordinate ──────────────────────
+        self.panel.calculator_tab.add_node_requested.connect(self._add_device_from_calc)
 
         # ── Environment tab signals ────────────────────────────────────────
         self.panel.summary_tab.path_loss_exponent_changed.connect(
@@ -282,6 +285,10 @@ class MainWindow(QMainWindow):
 
     def _add_device_at_view_center(self, device_type: DeviceType) -> None:
         x_m, y_m = self.view.viewport_center_world()
+        self.scenario_service.add_device(device_type, x_m, y_m)
+
+    def _add_device_from_calc(self, device_type: DeviceType, x_m: float, y_m: float) -> None:
+        """Add a device at the coordinate supplied by the Calculator tab."""
         self.scenario_service.add_device(device_type, x_m, y_m)
 
     def _rename_selected_device(self, new_name: str) -> None:

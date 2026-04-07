@@ -13,15 +13,18 @@ All ten variables share a single QFormLayout.  Each variable row wraps a
 QStackedWidget that shows either a QDoubleSpinBox (input) or a coloured
 QLabel (result) depending on the active mode.
 
-A coordinate-distance helper at the top can pipe a distance value into the
-main calculator.  「從場景匯入環境參數」fills propagation constants from the
-current EnvironmentModel.
+A coordinate-distance helper at the top supports two sub-modes:
+  • 兩點 → 距離    : give P_A and P_B, get the Euclidean distance.
+  • 原點+角度/距離 → 目標座標 : give P_A, an angle (deg) and a distance,
+                              get the target coordinate (ns-3 polar layout).
+
+「從場景匯入環境參數」fills propagation constants from the current EnvironmentModel.
 """
 from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -38,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from models.environment import EnvironmentModel
-from models.enums import BandId
+from models.enums import BandId, DeviceType
 from services.propagation_calculator import PropagationCalculator
 
 # ── Band display map ──────────────────────────────────────────────────────────
@@ -65,6 +68,10 @@ _SOLVE_LABELS = [
     "TX Power  ←  RSSI + 距離",
 ]
 
+# ── Coord-helper sub-mode constants ──────────────────────────────────────────
+_CM_TWO_POINTS = 0   # P_A + P_B  → distance
+_CM_POLAR      = 1   # P_A + angle + distance → target coords
+
 # ── Colour styles for result labels ──────────────────────────────────────────
 _S_DIST  = "color:#38BDF8; font-weight:bold; font-size:13px; padding:2px;"
 _S_PL    = "color:#FB923C; font-weight:bold; font-size:12px; padding:2px;"
@@ -75,6 +82,7 @@ _S_SNR_R = "color:#F87171; font-weight:bold; font-size:13px; padding:2px;"
 _S_NF    = "color:#C084FC; font-weight:bold; font-size:13px; padding:2px;"
 _S_TXP   = "color:#60A5FA; font-weight:bold; font-size:13px; padding:2px;"
 _S_ERR   = "color:#F87171; font-weight:bold; font-size:12px; padding:2px;"
+_S_COORD = "color:#38BDF8; font-weight:bold; font-size:13px; padding:2px;"
 
 
 def _snr_style(snr: float) -> str:
@@ -161,9 +169,20 @@ class _VarWidget(QWidget):
         return self._spin
 
 
+# ── Add-node coord source indices ────────────────────────────────────────────
+# These map to the _add_coord_combo items (rebuilt on coord-mode change).
+_AC_POINT_A  = 0
+_AC_POINT_B  = 1   # two-point mode only
+_AC_TARGET   = 1   # polar mode only  (same index, different label)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class CalculatorTab(QWidget):
     """Bidirectional RF link calculator with six Solve-For modes."""
+
+    # Emitted when the user clicks "新增為 AP/STA".
+    # Payload: (DeviceType, x_m: float, y_m: float)
+    add_node_requested = Signal(object, float, float)
 
     def __init__(self) -> None:
         super().__init__()
@@ -186,30 +205,113 @@ class CalculatorTab(QWidget):
 
         # ── Section 1: Coordinate Distance helper ─────────────────────────
         coord_grp = QGroupBox("📐  Distance（座標換算）")
-        coord_form = QFormLayout(coord_grp)
-        coord_form.setSpacing(4)
+        coord_vbox = QVBoxLayout(coord_grp)
+        coord_vbox.setSpacing(6)
+        coord_vbox.setContentsMargins(6, 8, 6, 8)
 
+        # ── coord sub-mode selector ───────────────────────────────────────
+        coord_mode_row = QHBoxLayout()
+        coord_mode_row.addWidget(QLabel("模式:"))
+        self._coord_mode_combo = QComboBox()
+        self._coord_mode_combo.addItem("兩點  →  距離")
+        self._coord_mode_combo.addItem("原點 + 角度/距離  →  目標座標")
+        coord_mode_row.addWidget(self._coord_mode_combo, stretch=1)
+        coord_vbox.addLayout(coord_mode_row)
+
+        # ── shared coord form ─────────────────────────────────────────────
+        coord_form = QFormLayout()
+        coord_form.setSpacing(4)
+        coord_vbox.addLayout(coord_form)
+        self._coord_form = coord_form  # save ref for setRowVisible
+
+        # Row 0/1: Point A — always visible
         self._cx1 = _mk_spin(-1e5, 1e5, 0.0, suffix=" m")
         self._cy1 = _mk_spin(-1e5, 1e5, 0.0, suffix=" m")
+        coord_form.addRow("Point A  X:", self._cx1)   # row 0
+        coord_form.addRow("Point A  Y:", self._cy1)   # row 1
+
+        # ── Mode 0 rows: Point B ──────────────────────────────────────────
         self._cx2 = _mk_spin(-1e5, 1e5, 100.0, suffix=" m")
         self._cy2 = _mk_spin(-1e5, 1e5, 0.0, suffix=" m")
+        coord_form.addRow("Point B  X:", self._cx2)   # row 2
+        coord_form.addRow("Point B  Y:", self._cy2)   # row 3
 
-        coord_form.addRow("Point A  X:", self._cx1)
-        coord_form.addRow("Point A  Y:", self._cy1)
-        coord_form.addRow("Point B  X:", self._cx2)
-        coord_form.addRow("Point B  Y:", self._cy2)
-
+        # Row 4 (mode 0): distance result
         self._coord_dist_lbl = QLabel("—")
         self._coord_dist_lbl.setStyleSheet(_S_DIST)
-        coord_form.addRow("Distance:", self._coord_dist_lbl)
+        coord_form.addRow("Distance:", self._coord_dist_lbl)  # row 4
+
+        # ── Mode 1 rows: Angle + polar distance ───────────────────────────
+        self._c_angle = _mk_spin(0.0, 360.0, 0.0, dec=1, suffix=" °", step=1.0)
+        self._c_polar_dist = _mk_spin(0.0, 1e6, 100.0, suffix=" m")
+        coord_form.addRow("角度 (°):", self._c_angle)          # row 5
+        coord_form.addRow("距離 (d):", self._c_polar_dist)     # row 6
+
+        # Row 7/8 (mode 1): computed target coordinates
+        self._c_target_x_lbl = QLabel("—")
+        self._c_target_x_lbl.setStyleSheet(_S_COORD)
+        self._c_target_y_lbl = QLabel("—")
+        self._c_target_y_lbl.setStyleSheet(_S_COORD)
+        coord_form.addRow("目標 X:", self._c_target_x_lbl)    # row 7
+        coord_form.addRow("目標 Y:", self._c_target_y_lbl)    # row 8
+
+        # ── Buttons (always visible) ──────────────────────────────────────
+        btn_row = QHBoxLayout()
 
         btn_pipe = QPushButton("↓  帶入下方 Distance 欄位")
         btn_pipe.setMaximumHeight(24)
-        btn_pipe.setToolTip("Copy this distance into the main calculator's Distance field")
+        btn_pipe.setToolTip(
+            "Mode 0：將兩點距離帶入主計算器 Distance 欄位\n"
+            "Mode 1：將極座標距離帶入主計算器 Distance 欄位"
+        )
         btn_pipe.clicked.connect(self._pipe_coord_distance)
-        coord_form.addRow("", btn_pipe)
+        btn_row.addWidget(btn_pipe)
+
+        self._btn_set_origin = QPushButton("↖  設為起點 A")
+        self._btn_set_origin.setMaximumHeight(24)
+        self._btn_set_origin.setToolTip("將目標座標填回 Point A，方便連續計算")
+        self._btn_set_origin.clicked.connect(self._set_target_as_origin)
+        btn_row.addWidget(self._btn_set_origin)
+
+        coord_form.addRow("", _make_layout_widget(btn_row))   # row 9
 
         root.addWidget(coord_grp)
+
+        # ── Section 1b: Add node from coord ──────────────────────────────
+        add_grp = QGroupBox("➕  新增為節點")
+        add_vbox = QVBoxLayout(add_grp)
+        add_vbox.setSpacing(5)
+        add_vbox.setContentsMargins(6, 8, 6, 8)
+
+        # Coord source selector (options vary by coord mode)
+        add_src_row = QHBoxLayout()
+        add_src_row.addWidget(QLabel("座標來源:"))
+        self._add_coord_combo = QComboBox()
+        add_src_row.addWidget(self._add_coord_combo, stretch=1)
+        add_vbox.addLayout(add_src_row)
+
+        # Preview label — shows the currently selected coordinate value
+        self._add_coord_preview = QLabel("( —, — )")
+        self._add_coord_preview.setStyleSheet(_S_COORD)
+        self._add_coord_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        add_vbox.addWidget(self._add_coord_preview)
+
+        # AP / STA buttons
+        add_btn_row = QHBoxLayout()
+        btn_add_ap = QPushButton("🔵  新增為 AP")
+        btn_add_ap.setMinimumHeight(26)
+        btn_add_ap.setToolTip("以所選座標位置新增一個 AP 節點至場景")
+        btn_add_ap.clicked.connect(lambda: self._add_node(DeviceType.AP))
+        btn_add_sta = QPushButton("🟢  新增為 STA")
+        btn_add_sta.setMinimumHeight(26)
+        btn_add_sta.setToolTip("以所選座標位置新增一個 STA 節點至場景")
+        btn_add_sta.clicked.connect(lambda: self._add_node(DeviceType.STA))
+        add_btn_row.addWidget(btn_add_ap)
+        add_btn_row.addWidget(btn_add_sta)
+        add_vbox.addLayout(add_btn_row)
+
+        self._add_node_grp = add_grp   # visibility toggled by coord mode
+        root.addWidget(add_grp)
 
         # ── Section 2: Solve-For mode selector ───────────────────────────
         mode_row = QHBoxLayout()
@@ -308,11 +410,16 @@ class CalculatorTab(QWidget):
         for sp in (self._cx1, self._cy1, self._cx2, self._cy2):
             sp.valueChanged.connect(self._recalc_coord)
 
+        for sp in (self._c_angle, self._c_polar_dist):
+            sp.valueChanged.connect(self._recalc_coord)
+
         self._solve_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._coord_mode_combo.currentIndexChanged.connect(self._on_coord_mode_changed)
+        self._add_coord_combo.currentIndexChanged.connect(self._update_add_coord_preview)
 
         # Initial render
-        self._recalc_coord()
-        self._on_mode_changed(0)   # triggers _apply_mode + _recalc
+        self._on_coord_mode_changed(0)   # sets row visibility + recalcs coord + rebuilds add-combo
+        self._on_mode_changed(0)         # triggers _apply_mode + _recalc
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -329,7 +436,42 @@ class CalculatorTab(QWidget):
             self._env_hint.setStyleSheet("color:#64748B; font-size:10px;")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Mode management
+    # Coord sub-mode management
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _on_coord_mode_changed(self, mode: int) -> None:
+        """Toggle visible rows in the coord helper section."""
+        cf = self._coord_form
+        is_two_pts = (mode == _CM_TWO_POINTS)
+
+        # Mode 0 rows: Point B (2,3) + Distance result (4)
+        for row in (2, 3, 4):
+            cf.setRowVisible(row, is_two_pts)
+
+        # Mode 1 rows: angle (5), polar dist (6), target X (7), target Y (8)
+        for row in (5, 6, 7, 8):
+            cf.setRowVisible(row, not is_two_pts)
+
+        # "設為起點" button only makes sense in polar mode
+        self._btn_set_origin.setVisible(not is_two_pts)
+
+        # "新增為節點" group only shows in polar mode
+        self._add_node_grp.setVisible(not is_two_pts)
+
+        # Rebuild the coord-source options in the add-node group
+        self._add_coord_combo.blockSignals(True)
+        self._add_coord_combo.clear()
+        self._add_coord_combo.addItem("Point A  (原點)")
+        if is_two_pts:
+            self._add_coord_combo.addItem("Point B  (目標點)")
+        else:
+            self._add_coord_combo.addItem("目標座標  (計算結果)")
+        self._add_coord_combo.blockSignals(False)
+
+        self._recalc_coord()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # RF mode management
     # ──────────────────────────────────────────────────────────────────────────
 
     def _on_mode_changed(self, mode: int) -> None:
@@ -376,7 +518,7 @@ class CalculatorTab(QWidget):
             self._v_snr.set_as_input(False)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Calculations
+    # RF Calculations
     # ──────────────────────────────────────────────────────────────────────────
 
     def _recalc(self) -> None:
@@ -468,7 +610,6 @@ class CalculatorTab(QWidget):
             self._r_main.setText(f"RSSI = {rssi:.2f} dBm")
             self._r_main.setStyleSheet(_S_RSSI)
         elif mode == _M_DIST_FROM_RSSI:
-            pass   # shown in the variable row itself; main result repeats PL
             self._r_main.setText(f"Path Loss = {pl:.2f} dB" if pl is not None else "—")
             self._r_main.setStyleSheet(_S_PL)
         elif mode in (_M_SNR, _M_RSSI_FROM_SNR, _M_NF) and snr is not None:
@@ -491,22 +632,101 @@ class CalculatorTab(QWidget):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _recalc_coord(self) -> None:
-        d = self._calc.compute_distance_m(
-            self._cx1.value(), self._cy1.value(),
-            self._cx2.value(), self._cy2.value(),
-        )
-        self._coord_dist_lbl.setText(f"{d:.3f} m")
+        """Recompute coord section based on the active sub-mode."""
+        mode = self._coord_mode_combo.currentIndex()
+
+        if mode == _CM_TWO_POINTS:
+            # Euclidean distance between P_A and P_B
+            d = self._calc.compute_distance_m(
+                self._cx1.value(), self._cy1.value(),
+                self._cx2.value(), self._cy2.value(),
+            )
+            self._coord_dist_lbl.setText(f"{d:.3f} m")
+
+        else:  # _CM_POLAR
+            # Polar → Cartesian  (same formula as ns-3 BuildStaPositionsForBss)
+            #   tx = x1 + dist * cos(angle_rad)
+            #   ty = y1 + dist * sin(angle_rad)
+            x1   = self._cx1.value()
+            y1   = self._cy1.value()
+            dist = self._c_polar_dist.value()
+            rad  = math.radians(self._c_angle.value())
+            tx   = x1 + dist * math.cos(rad)
+            ty   = y1 + dist * math.sin(rad)
+            self._c_target_x_lbl.setText(f"{tx:.3f} m")
+            self._c_target_y_lbl.setText(f"{ty:.3f} m")
+
+        # Keep the add-node preview up to date
+        self._update_add_coord_preview()
 
     def _pipe_coord_distance(self) -> None:
-        """Copy the coordinate distance into the main Distance variable."""
-        d = self._calc.compute_distance_m(
-            self._cx1.value(), self._cy1.value(),
-            self._cx2.value(), self._cy2.value(),
-        )
+        """Copy a distance value into the main Distance variable.
+
+        Mode 0 (two-point): pipes the computed Euclidean distance.
+        Mode 1 (polar):     pipes the polar distance input directly.
+        """
+        mode = self._coord_mode_combo.currentIndex()
+
+        if mode == _CM_TWO_POINTS:
+            d = self._calc.compute_distance_m(
+                self._cx1.value(), self._cy1.value(),
+                self._cx2.value(), self._cy2.value(),
+            )
+        else:
+            d = self._c_polar_dist.value()
+
         self._v_dist.set_value(d)
-        # If dist is currently an input, recalc picks it up automatically.
-        # If it's the output (mode 1), changing it doesn't matter, but recalc anyway.
         self._recalc()
+
+    def _get_selected_coord(self) -> tuple[float, float]:
+        """Return (x_m, y_m) for whichever coord source is chosen in the add-node combo."""
+        coord_mode = self._coord_mode_combo.currentIndex()
+        src_idx    = self._add_coord_combo.currentIndex()
+
+        if src_idx == _AC_POINT_A:
+            return self._cx1.value(), self._cy1.value()
+
+        # src_idx == 1: Point B (two-point mode) or computed Target (polar mode)
+        if coord_mode == _CM_TWO_POINTS:
+            return self._cx2.value(), self._cy2.value()
+        else:
+            # Recompute target to ensure consistency
+            x1   = self._cx1.value()
+            y1   = self._cy1.value()
+            dist = self._c_polar_dist.value()
+            rad  = math.radians(self._c_angle.value())
+            return x1 + dist * math.cos(rad), y1 + dist * math.sin(rad)
+
+    def _update_add_coord_preview(self, _index: int = 0) -> None:
+        """Refresh the coordinate preview label in the add-node group."""
+        try:
+            x, y = self._get_selected_coord()
+            self._add_coord_preview.setText(f"( {x:.3f} m,  {y:.3f} m )")
+        except Exception:
+            self._add_coord_preview.setText("( —, — )")
+
+    def _add_node(self, device_type: DeviceType) -> None:
+        """Emit add_node_requested with the currently previewed coordinate."""
+        x, y = self._get_selected_coord()
+        self.add_node_requested.emit(device_type, x, y)
+
+    def _set_target_as_origin(self) -> None:
+        """（極座標模式）將目標座標填回 Point A，方便連續計算下一段路徑。"""
+        x1   = self._cx1.value()
+        y1   = self._cy1.value()
+        dist = self._c_polar_dist.value()
+        rad  = math.radians(self._c_angle.value())
+        tx   = x1 + dist * math.cos(rad)
+        ty   = y1 + dist * math.sin(rad)
+
+        for sp in (self._cx1, self._cy1):
+            sp.blockSignals(True)
+        self._cx1.setValue(tx)
+        self._cy1.setValue(ty)
+        for sp in (self._cx1, self._cy1):
+            sp.blockSignals(False)
+
+        self._recalc_coord()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Import from scene
@@ -543,3 +763,12 @@ class CalculatorTab(QWidget):
             sp.blockSignals(False)
 
         self._recalc()
+
+
+# ── Module-level helper ───────────────────────────────────────────────────────
+def _make_layout_widget(layout: QHBoxLayout) -> QWidget:
+    """Wrap a QHBoxLayout in a plain QWidget so it can be passed to addRow."""
+    w = QWidget()
+    w.setLayout(layout)
+    w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    return w
