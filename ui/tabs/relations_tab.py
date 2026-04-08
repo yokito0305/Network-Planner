@@ -148,29 +148,34 @@ class RelationsTab(QWidget):
 
     def set_relations(self, snapshot: RelationsSnapshotModel | None) -> None:
         """Populate tables from *snapshot*.  Pass ``None`` to clear."""
-        self._peers = []
-        self._peer_table.setRowCount(0)
-        self._link_table.setRowCount(0)
+        self._peer_table.blockSignals(True)
+        try:
+            self._peers = []
+            self._peer_table.setRowCount(0)
+            self._link_table.setRowCount(0)
 
-        if snapshot is None or not snapshot.peers:
-            self._detail_label.setText("Link details: (select a peer)")
-            return
+            if snapshot is None or not snapshot.peers:
+                self._detail_label.setText("Link details: (select a peer)")
+                return
 
-        self._peers = snapshot.peers
-        self._peer_table.setRowCount(len(self._peers))
-        for row, peer in enumerate(self._peers):
-            self._peer_table.setItem(row, _P_NAME, _ro_item(peer.peer_name, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
-            self._peer_table.setItem(row, _P_TYPE, _ro_item(peer.peer_type.value))
-            self._peer_table.setItem(row, _P_DIST, _ro_item(f"{peer.distance_m:.1f} m"))
-            self._peer_table.setItem(row, _P_LINKS, _ro_item(str(peer.link_count)))
-            self._peer_table.setItem(row, _P_RSSI, _ro_item(_fmt_dbm(peer.best_rssi_dbm)))
-            self._peer_table.setItem(row, _P_SNR, _ro_item(_fmt_db(peer.best_snr_db)))
-            self._peer_table.setItem(row, _P_SINR, _ro_item(_fmt_db(peer.best_sinr_db)))
-            self._peer_table.setItem(row, _P_STATUS, _ro_item(peer.status_summary))
+            self._peers = snapshot.peers
+            self._peer_table.setRowCount(len(self._peers))
+            for row, peer in enumerate(self._peers):
+                self._peer_table.setItem(row, _P_NAME, _ro_item(peer.peer_name, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
+                self._peer_table.setItem(row, _P_TYPE, _ro_item(peer.peer_type.value))
+                self._peer_table.setItem(row, _P_DIST, _ro_item(f"{peer.distance_m:.2f} m"))
+                self._peer_table.setItem(row, _P_LINKS, _ro_item(str(peer.link_count)))
+                self._peer_table.setItem(row, _P_RSSI, _ro_item(_fmt_dbm(peer.best_rssi_dbm)))
+                self._peer_table.setItem(row, _P_SNR, _ro_item(_fmt_db(peer.best_snr_db)))
+                self._peer_table.setItem(row, _P_SINR, _ro_item(_fmt_db(peer.best_sinr_db)))
+                self._peer_table.setItem(row, _P_STATUS, _ro_item(peer.status_summary))
 
-        # Auto-select first peer
-        if self._peers:
+            # Auto-select first peer
             self._peer_table.selectRow(0)
+        finally:
+            self._peer_table.blockSignals(False)
+
+        self._on_peer_selection_changed()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Private helpers

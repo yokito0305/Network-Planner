@@ -27,6 +27,7 @@ class PlannerScene(QGraphicsScene):
         self.transform = transform
         self._items_by_id: dict[str, DeviceItem] = {}
         self._label_mode = "selected_only"
+        self._suspend_scene_selection_sync = False
 
         self.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
         self.setSceneRect(self.transform.scene_rect(self.scenario_service.scenario))
@@ -226,9 +227,27 @@ class PlannerScene(QGraphicsScene):
         self.removeItem(item)
 
     def _on_selection_changed(self, device_id: str | None) -> None:
-        for current_id, item in self._items_by_id.items():
-            item.setSelected(current_id == device_id)
+        target_item = self._items_by_id.get(device_id) if device_id is not None else None
+        selected_items = [
+            item for item in self.selectedItems()
+            if isinstance(item, DeviceItem)
+        ]
+
+        self._suspend_scene_selection_sync = True
+        try:
+            for item in selected_items:
+                if item is not target_item:
+                    item.setSelected(False)
+
+            if target_item is not None and not target_item.isSelected():
+                target_item.setSelected(True)
+        finally:
+            self._suspend_scene_selection_sync = False
+
+        for item in selected_items:
             item.set_label_mode(self._label_mode)
+        if target_item is not None:
+            target_item.set_label_mode(self._label_mode)
 
     def _on_item_moved(self, device_id: str, scene_x: float, scene_y: float) -> None:
         x_m, y_m = self.transform.scene_to_world(
@@ -245,6 +264,8 @@ class PlannerScene(QGraphicsScene):
             self._on_device_added(device)
 
     def _sync_selection_from_scene(self) -> None:
+        if self._suspend_scene_selection_sync:
+            return
         selected_items = self.selectedItems()
         if not selected_items:
             self.selection_service.set_selected_device_id(None)

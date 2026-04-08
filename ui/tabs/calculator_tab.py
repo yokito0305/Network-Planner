@@ -388,6 +388,15 @@ class CalculatorTab(QWidget):
 
         btn_import = QPushButton("匯入  ref_dist / ref_loss / n / noise_floor")
         btn_import.setMaximumHeight(26)
+        btn_import.setToolTip(
+            "從目前場景的環境設定匯入：\n"
+            "  • Ref. Distance (d₀)\n"
+            "  • Ref. Loss (PL₀)  ← 依選擇的 Band\n"
+            "  • Path Loss Exp. (n)\n"
+            "  • Noise Floor  ← 優先使用 Band 的值，否則用全域預設\n\n"
+            "注意：TX Power 為 per-device 參數（各裝置獨立設定），\n"
+            "不屬於環境參數，故不在匯入範圍內。"
+        )
         btn_import.clicked.connect(self._import_from_env)
         env_layout.addWidget(btn_import)
 
@@ -485,14 +494,14 @@ class CalculatorTab(QWidget):
             vw.set_as_input(True)
 
         if mode == _M_RSSI_FROM_DIST:
-            # RF params → RSSI; SNR derivation uses NF; disable SNR input
+            # RF params → RSSI; SNR is derived from RSSI − NF (output only)
             self._v_rssi.set_as_output(style=_S_RSSI)
-            self._v_snr.set_as_input(False)
+            self._v_snr.set_as_output(style=_S_SNR_Y)
 
         elif mode == _M_DIST_FROM_RSSI:
-            # RSSI + RF params → Distance; SNR derivation uses NF; disable SNR input
+            # RSSI + RF params → Distance; SNR is derived from RSSI − NF (output only)
             self._v_dist.set_as_output(style=_S_DIST)
-            self._v_snr.set_as_input(False)
+            self._v_snr.set_as_output(style=_S_SNR_Y)
 
         elif mode == _M_SNR:
             # RSSI + NF → SNR; RF params irrelevant
@@ -513,9 +522,9 @@ class CalculatorTab(QWidget):
                 vw.set_as_input(False)
 
         elif mode == _M_TXP:
-            # RSSI + distance + params → TX Power; disable SNR input
+            # RSSI + distance + params → TX Power; SNR is derived (output only)
             self._v_txp.set_as_output(style=_S_TXP)
-            self._v_snr.set_as_input(False)
+            self._v_snr.set_as_output(style=_S_SNR_Y)
 
     # ──────────────────────────────────────────────────────────────────────────
     # RF Calculations
@@ -551,6 +560,7 @@ class CalculatorTab(QWidget):
                 _rssi = c.compute_rssi_dbm(txp(), pl, txg(), rxg())
                 _snr = c.compute_snr_db(_rssi, nf())
                 self._v_rssi.update_output(f"{_rssi:.2f} dBm", _S_RSSI)
+                self._v_snr.update_output(f"{_snr:.2f} dB", _snr_style(_snr))
                 self._show_derived(pl, _rssi, _snr)
 
             elif mode == _M_DIST_FROM_RSSI:
@@ -562,7 +572,8 @@ class CalculatorTab(QWidget):
                 pl = effective_pl
                 _snr = c.compute_snr_db(rssi(), nf())
                 self._v_dist.update_output(f"{dist_m:.3f} m", _S_DIST)
-                self._show_derived(pl, rssi(), _snr)
+                self._v_snr.update_output(f"{_snr:.2f} dB", _snr_style(_snr))
+                self._show_derived(pl, rssi(), _snr, dist_m=dist_m)
 
             elif mode == _M_SNR:
                 _snr = c.compute_snr_db(rssi(), nf())
@@ -584,6 +595,7 @@ class CalculatorTab(QWidget):
                 _txp = rssi() + pl - txg() - rxg()
                 _snr = c.compute_snr_db(rssi(), nf())
                 self._v_txp.update_output(f"{_txp:.2f} dBm", _S_TXP)
+                self._v_snr.update_output(f"{_snr:.2f} dB", _snr_style(_snr))
                 self._show_derived(pl, rssi(), _snr)
 
         except (ValueError, ZeroDivisionError, OverflowError) as exc:
@@ -594,6 +606,7 @@ class CalculatorTab(QWidget):
         pl: float | None,
         rssi: float | None,
         snr: float | None,
+        dist_m: float | None = None,
     ) -> None:
         """Update the always-visible Path Loss and main-result labels."""
         mode = self._solve_combo.currentIndex()
@@ -609,9 +622,9 @@ class CalculatorTab(QWidget):
         if mode == _M_RSSI_FROM_DIST and rssi is not None:
             self._r_main.setText(f"RSSI = {rssi:.2f} dBm")
             self._r_main.setStyleSheet(_S_RSSI)
-        elif mode == _M_DIST_FROM_RSSI:
-            self._r_main.setText(f"Path Loss = {pl:.2f} dB" if pl is not None else "—")
-            self._r_main.setStyleSheet(_S_PL)
+        elif mode == _M_DIST_FROM_RSSI and dist_m is not None:
+            self._r_main.setText(f"Distance = {dist_m:.3f} m")
+            self._r_main.setStyleSheet(_S_DIST)
         elif mode in (_M_SNR, _M_RSSI_FROM_SNR, _M_NF) and snr is not None:
             self._r_main.setText(f"SNR = {snr:.2f} dB")
             self._r_main.setStyleSheet(_snr_style(snr))

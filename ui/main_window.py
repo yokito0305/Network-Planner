@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
 
         # Lock feature — when set, the right-side panel stays fixed on this device
         self._locked_device_id: str | None = None
+        self._selection_refresh_scheduled = False
 
         self.setWindowTitle("Network Planner")
         self.resize(1400, 900)
@@ -198,11 +199,31 @@ class MainWindow(QMainWindow):
                 self.palette.node_list.set_locked(False)
         # Right-side panel only updates when NOT locked
         if self._locked_device_id is None:
-            self._refresh_selected_device()
-            self._refresh_relations()
+            self._schedule_selection_refresh()
+
+    def _schedule_selection_refresh(self) -> None:
+        if self._selection_refresh_scheduled:
+            return
+        self._selection_refresh_scheduled = True
+        QTimer.singleShot(0, self._do_refresh_after_selection_change)
+
+    def _do_refresh_after_selection_change(self) -> None:
+        self._selection_refresh_scheduled = False
+        if self._locked_device_id is not None:
+            return
+        self._refresh_selected_device()
+        self._refresh_relations()
 
     def _on_device_updated(self) -> None:
         self._update_status_bar_selection()
+        # Defer the panel refresh (same pattern as _refresh_node_list) to avoid
+        # destroying QTableWidget cell widgets (in WifiLinkTab) while their
+        # editingFinished signals are still being dispatched from a focus-change
+        # event. Immediate deletion of the sender during signal dispatch causes
+        # a segfault / "wrapped C++ object has been deleted" crash.
+        QTimer.singleShot(0, self._do_refresh_after_device_update)
+
+    def _do_refresh_after_device_update(self) -> None:
         # Always refresh panel — the locked device's data may have changed
         self._refresh_selected_device()
         self._refresh_relations()
