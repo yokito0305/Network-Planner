@@ -148,6 +148,11 @@ class MainWindow(QMainWindow):
         self.scenario_service.device_removed.connect(lambda _id: self._refresh_node_list())
         self.scenario_service.device_updated.connect(lambda _d: self._refresh_node_list())
         self.scenario_service.scenario_replaced.connect(self._refresh_node_list)
+        # NS3 Export — refresh on any structural change
+        self.scenario_service.device_added.connect(lambda _d: self._refresh_ns3_export())
+        self.scenario_service.device_removed.connect(lambda _id: self._refresh_ns3_export())
+        self.scenario_service.device_updated.connect(lambda _d: self._refresh_ns3_export())
+        self.scenario_service.scenario_replaced.connect(self._refresh_ns3_export)
         self.selection_service.selection_changed.connect(
             lambda dev_id: self.left_palette.node_list.set_selected(dev_id)
         )
@@ -289,6 +294,12 @@ class MainWindow(QMainWindow):
         env = self.scenario_service.scenario.environment
         # Unified call: updates both Environment tab and Calculator tab
         self.panel.set_environment(env)
+        self._refresh_ns3_export()
+
+    def _refresh_ns3_export(self) -> None:
+        devices = self.scenario_service.list_devices()
+        env = self.scenario_service.scenario.environment
+        self.panel.set_scenario(devices, env)
 
     def _refresh_node_list(self) -> None:
         # Deferred: avoids destroying QTreeWidgetItems while a click event
@@ -313,9 +324,25 @@ class MainWindow(QMainWindow):
         x_m, y_m = self.view.viewport_center_world()
         self.scenario_service.add_device(device_type, x_m, y_m)
 
-    def _add_device_from_calc(self, device_type: DeviceType, x_m: float, y_m: float) -> None:
-        """Add a device at the coordinate supplied by the Calculator tab."""
-        self.scenario_service.add_device(device_type, x_m, y_m)
+    def _add_device_from_calc(
+        self,
+        device_type: DeviceType,
+        x_m: float,
+        y_m: float,
+        band: BandId | None,
+        channel_width_mhz: int | None,
+    ) -> None:
+        """Add a device at the coordinate supplied by the Calculator tab.
+
+        band / channel_width_mhz come from the last "匯入" action; both are
+        None when the user has not imported yet, in which case add_device()
+        falls back to its own defaults.
+        """
+        self.scenario_service.add_device(
+            device_type, x_m, y_m,
+            band=band,
+            channel_width_mhz=channel_width_mhz,
+        )
 
     def _rename_selected_device(self, new_name: str) -> None:
         device_id = self.selection_service.selected_device_id

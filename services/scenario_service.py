@@ -42,8 +42,20 @@ class ScenarioService(QObject):
                 return device
         return None
 
-    def add_device(self, device_type: DeviceType, x_m: float, y_m: float) -> DeviceModel:
+    def add_device(
+        self,
+        device_type: DeviceType,
+        x_m: float,
+        y_m: float,
+        band: BandId | None = None,
+        channel_width_mhz: int | None = None,
+    ) -> DeviceModel:
         x_m, y_m = self.transform.clamp_world(self.scenario, x_m, y_m)
+        link = create_default_link()
+        if band is not None:
+            link.band = band
+        if channel_width_mhz is not None:
+            link.channel_width_mhz = channel_width_mhz
         device = DeviceModel(
             id=uuid.uuid4().hex,
             name=self.naming_service.next_name(device_type),
@@ -51,6 +63,7 @@ class ScenarioService(QObject):
             x_m=x_m,
             y_m=y_m,
         )
+        device.radio.links[0] = link
         self.scenario.devices.append(device)
         self.selection_service.set_selected_device_id(device.id)
         self.device_added.emit(device)

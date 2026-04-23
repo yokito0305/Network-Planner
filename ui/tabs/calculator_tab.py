@@ -44,6 +44,9 @@ from models.environment import EnvironmentModel
 from models.enums import BandId, DeviceType
 from services.propagation_calculator import PropagationCalculator
 
+# Sentinel — indicates no import has been performed yet
+_NOT_IMPORTED = object()
+
 # ── Band display map ──────────────────────────────────────────────────────────
 _BAND_LABELS: dict[BandId, str] = {
     BandId.BAND_2G4: "2.4 GHz",
@@ -181,14 +184,19 @@ class CalculatorTab(QWidget):
     """Bidirectional RF link calculator with six Solve-For modes."""
 
     # Emitted when the user clicks "新增為 AP/STA".
-    # Payload: (DeviceType, x_m: float, y_m: float)
-    add_node_requested = Signal(object, float, float)
+    # Payload: (DeviceType, x_m: float, y_m: float, band: BandId | None, channel_width_mhz: int | None)
+    # band / channel_width_mhz are None when the user has not yet clicked "匯入".
+    add_node_requested = Signal(object, float, float, object, object)
 
     def __init__(self) -> None:
         super().__init__()
         self._calc = PropagationCalculator()
         self._env: EnvironmentModel | None = None
         self._updating = False  # re-entrancy guard
+
+        # Set by _import_from_env(); None until the user clicks "匯入".
+        self._imported_band: BandId | None = None
+        self._imported_width_mhz: int | None = None
 
         # ── outer scroll area ─────────────────────────────────────────────
         outer = QVBoxLayout(self)
@@ -742,9 +750,17 @@ class CalculatorTab(QWidget):
             self._add_coord_preview.setText("( —, — )")
 
     def _add_node(self, device_type: DeviceType) -> None:
-        """Emit add_node_requested with the currently previewed coordinate."""
+        """Emit add_node_requested with the currently previewed coordinate.
+
+        band and channel_width_mhz are None when the user has not yet clicked
+        "匯入" — the receiver should fall back to its own defaults in that case.
+        """
         x, y = self._get_selected_coord()
-        self.add_node_requested.emit(device_type, x, y)
+        self.add_node_requested.emit(
+            device_type, x, y,
+            self._imported_band,
+            self._imported_width_mhz,
+        )
 
     def _set_target_as_origin(self) -> None:
         """（極座標模式）將目標座標填回 Point A，方便連續計算下一段路徑。"""
@@ -802,6 +818,10 @@ class CalculatorTab(QWidget):
 
         for sp in targets:
             sp.blockSignals(False)
+
+        # Remember which band/width was imported — used when adding nodes.
+        self._imported_band = selected_band
+        self._imported_width_mhz = effective_width_mhz
 
         self._width_hint.setText(
             f"Effective Measurement Width: {effective_width_mhz} MHz"

@@ -22,6 +22,7 @@ from models.relations import RelationsSnapshotModel
 from ui.tabs.calculator_tab import CalculatorTab
 from ui.tabs.device_basic_tab import DeviceBasicTab
 from ui.tabs.environment_summary_tab import EnvironmentSummaryTab
+from ui.tabs.ns3_export_tab import NS3ExportTab
 from ui.tabs.relations_tab import RelationsTab
 from ui.tabs.wifi_link_tab import WifiLinkTab
 
@@ -46,11 +47,14 @@ class PropertyPanel(QWidget):
         self.relations_tab = RelationsTab()
         self.calculator_tab = CalculatorTab()
 
+        self.ns3_export_tab = NS3ExportTab()
+
         self.tabs.addTab(self.device_basic_tab, "Device Basic")
         self.tabs.addTab(self.wifi_tab, "Wi-Fi / Link")
         self.tabs.addTab(self.summary_tab, "Environment")
         self.tabs.addTab(self.relations_tab, "Relations")
         self.tabs.addTab(self.calculator_tab, "Calculator")
+        self.tabs.addTab(self.ns3_export_tab, "NS3 Export")
 
         layout.addWidget(self.tabs)
 
@@ -73,3 +77,7 @@ class PropertyPanel(QWidget):
         if env is not None:
             self.summary_tab.set_environment(env)
         self.calculator_tab.set_environment(env)
+
+    def set_scenario(self, devices: list, env: EnvironmentModel | None) -> None:
+        """Push full scene data into the NS3 Export tab."""
+        self.ns3_export_tab.set_scenario(devices, env)
