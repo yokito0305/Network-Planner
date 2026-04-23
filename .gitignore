@@ -41,3 +41,6 @@ bin/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# NS-3 refference files
+ref/

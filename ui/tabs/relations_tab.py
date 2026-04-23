@@ -3,10 +3,10 @@
 Displays a two-level view of link relations for the currently selected device:
 
   Upper table — Peer summary
-    Columns: Peer Name | Type | Distance | Links | Best RSSI | Best SNR | Best SINR | Status
+    Columns: Peer Name | Type | Distance | Links | Cfg Width | Eff Width | Best RSSI | Noise Floor | Best SNR | Best SINR | Status
 
   Lower table — Link detail (for the row selected in the upper table)
-    Columns: Band | Selected Link | Peer Link | Freq (MHz) | Path Loss | RSSI | SNR | SINR | Status
+    Columns: Band | Selected Link | Peer Link | Freq (MHz) | Cfg Width | Eff Width | Path Loss | RSSI | Noise Floor | Noise Source | SNR | SINR | Status
 
 Accepts a ``RelationsSnapshotModel``; performs NO computation itself.
 """
@@ -62,25 +62,58 @@ _P_NAME = 0
 _P_TYPE = 1
 _P_DIST = 2
 _P_LINKS = 3
-_P_RSSI = 4
-_P_SNR = 5
-_P_SINR = 6
-_P_STATUS = 7
+_P_CFG_WIDTH = 4
+_P_EFF_WIDTH = 5
+_P_RSSI = 6
+_P_NOISE = 7
+_P_SNR = 8
+_P_SINR = 9
+_P_STATUS = 10
 
-_PEER_HEADERS = ["Peer", "Type", "Distance", "Links", "Best RSSI", "Best SNR", "Best SINR", "Status"]
+_PEER_HEADERS = [
+    "Peer",
+    "Type",
+    "Distance",
+    "Links",
+    "Cfg Width",
+    "Eff Width",
+    "Best RSSI",
+    "Noise Floor",
+    "Best SNR",
+    "Best SINR",
+    "Status",
+]
 
 # ── Link detail table column indices ──────────────────────────────────────────
 _L_BAND = 0
 _L_SEL_LINK = 1
 _L_PEER_LINK = 2
 _L_FREQ = 3
-_L_PL = 4
-_L_RSSI = 5
-_L_SNR = 6
-_L_SINR = 7
-_L_STATUS = 8
+_L_CFG_WIDTH = 4
+_L_EFF_WIDTH = 5
+_L_PL = 6
+_L_RSSI = 7
+_L_NOISE = 8
+_L_NOISE_SOURCE = 9
+_L_SNR = 10
+_L_SINR = 11
+_L_STATUS = 12
 
-_LINK_HEADERS = ["Band", "Sel. Link", "Peer Link", "Freq (MHz)", "Path Loss", "RSSI", "SNR", "SINR", "Status"]
+_LINK_HEADERS = [
+    "Band",
+    "Sel. Link",
+    "Peer Link",
+    "Freq (MHz)",
+    "Cfg Width",
+    "Eff Width",
+    "Path Loss",
+    "RSSI",
+    "Noise Floor",
+    "Noise Source",
+    "SNR",
+    "SINR",
+    "Status",
+]
 
 
 class RelationsTab(QWidget):
@@ -165,7 +198,18 @@ class RelationsTab(QWidget):
                 self._peer_table.setItem(row, _P_TYPE, _ro_item(peer.peer_type.value))
                 self._peer_table.setItem(row, _P_DIST, _ro_item(f"{peer.distance_m:.2f} m"))
                 self._peer_table.setItem(row, _P_LINKS, _ro_item(str(peer.link_count)))
+                self._peer_table.setItem(
+                    row,
+                    _P_CFG_WIDTH,
+                    _ro_item(_fmt_width(peer.best_configured_width_mhz)),
+                )
+                self._peer_table.setItem(
+                    row,
+                    _P_EFF_WIDTH,
+                    _ro_item(_fmt_width(peer.best_effective_width_mhz)),
+                )
                 self._peer_table.setItem(row, _P_RSSI, _ro_item(_fmt_dbm(peer.best_rssi_dbm)))
+                self._peer_table.setItem(row, _P_NOISE, _ro_item(_fmt_dbm(peer.best_noise_floor_dbm)))
                 self._peer_table.setItem(row, _P_SNR, _ro_item(_fmt_db(peer.best_snr_db)))
                 self._peer_table.setItem(row, _P_SINR, _ro_item(_fmt_db(peer.best_sinr_db)))
                 self._peer_table.setItem(row, _P_STATUS, _ro_item(peer.status_summary))
@@ -196,8 +240,12 @@ class RelationsTab(QWidget):
             self._link_table.setItem(r, _L_SEL_LINK, _ro_item(link.selected_link_name, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
             self._link_table.setItem(r, _L_PEER_LINK, _ro_item(link.peer_link_name, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter))
             self._link_table.setItem(r, _L_FREQ, _ro_item(f"{link.frequency_mhz:.1f}"))
+            self._link_table.setItem(r, _L_CFG_WIDTH, _ro_item(_fmt_width(link.configured_width_mhz)))
+            self._link_table.setItem(r, _L_EFF_WIDTH, _ro_item(_fmt_width(link.effective_width_mhz)))
             self._link_table.setItem(r, _L_PL, _ro_item(f"{link.path_loss_db:.1f} dB"))
             self._link_table.setItem(r, _L_RSSI, _ro_item(_fmt_dbm(link.rssi_dbm)))
+            self._link_table.setItem(r, _L_NOISE, _ro_item(_fmt_dbm(link.noise_floor_dbm)))
+            self._link_table.setItem(r, _L_NOISE_SOURCE, _ro_item(link.noise_source))
             self._link_table.setItem(r, _L_SNR, _ro_item(_fmt_db(link.snr_db)))
             self._link_table.setItem(r, _L_SINR, _ro_item(_fmt_db(link.sinr_db)))
             self._link_table.setItem(r, _L_STATUS, _ro_item(link.status))
@@ -235,3 +283,7 @@ def _configure_link_header(table: QTableWidget) -> None:
     table.setColumnWidth(_L_SEL_LINK, 68)
     table.setColumnWidth(_L_PEER_LINK, 68)
     table.verticalHeader().setVisible(False)
+
+
+def _fmt_width(value: int | None) -> str:
+    return f"{value} MHz" if value is not None else "—"

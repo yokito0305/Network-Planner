@@ -11,9 +11,13 @@ class LinkRelationModel:
     peer_link_name: str
     band: BandId
     frequency_mhz: float
+    configured_width_mhz: int
+    effective_width_mhz: int
     distance_m: float
     path_loss_db: float
     rssi_dbm: float
+    noise_floor_dbm: float
+    noise_source: str
     snr_db: float
     sinr_db: float          # Signal / (Interference + Noise); equals SNR when no interferers
     status: str
@@ -28,7 +32,10 @@ class PeerRelationModel:
     distance_m: float
     link_count: int
     best_band: BandId | None
+    best_configured_width_mhz: int | None
+    best_effective_width_mhz: int | None
     best_rssi_dbm: float | None
+    best_noise_floor_dbm: float | None
     best_snr_db: float | None
     best_sinr_db: float | None  # SINR of the same best link
     status_summary: str

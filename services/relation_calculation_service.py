@@ -9,6 +9,7 @@ from services.propagation_calculator import PropagationCalculator
 class RelationCalculationService:
     def __init__(self, propagation_calculator: PropagationCalculator | None = None) -> None:
         self.propagation_calculator = propagation_calculator or PropagationCalculator()
+        self.measurement_policy = "configured_width"
 
     def build_snapshot(
         self,
@@ -55,10 +56,20 @@ class RelationCalculationService:
                     continue
 
                 band_profile = self._get_band_profile(scenario, selected_link.band)
-                noise_floor_dbm = (
-                    band_profile.noise_floor_dbm
-                    if band_profile.noise_floor_dbm is not None
-                    else scenario.environment.default_noise_floor_dbm
+                selected_width_mhz = self.propagation_calculator.resolve_configured_link_width_mhz(
+                    selected_link
+                )
+                peer_width_mhz = self.propagation_calculator.resolve_configured_link_width_mhz(peer_link)
+                configured_width_mhz = min(selected_width_mhz, peer_width_mhz)
+                effective_width_mhz = self.propagation_calculator.resolve_effective_measurement_width_mhz(
+                    configured_width_mhz,
+                    self.measurement_policy,
+                )
+                noise_floor_dbm, noise_source = self.propagation_calculator.resolve_noise_floor_dbm(
+                    band_profile.manual_noise_floor_dbm,
+                    scenario.environment.manual_global_noise_floor_dbm,
+                    effective_width_mhz,
+                    scenario.environment.rx_noise_figure_db,
                 )
 
                 path_loss_db = self.propagation_calculator.compute_path_loss_db(
@@ -114,9 +125,13 @@ class RelationCalculationService:
                         peer_link_name=peer_link.name,
                         band=selected_link.band,
                         frequency_mhz=band_profile.frequency_mhz,
+                        configured_width_mhz=configured_width_mhz,
+                        effective_width_mhz=effective_width_mhz,
                         distance_m=distance_m,
                         path_loss_db=path_loss_db,
                         rssi_dbm=rssi_dbm,
+                        noise_floor_dbm=noise_floor_dbm,
+                        noise_source=noise_source,
                         snr_db=snr_db,
                         sinr_db=sinr_db,
                         status="paired",
@@ -132,7 +147,10 @@ class RelationCalculationService:
             distance_m=distance_m,
             link_count=len(links),
             best_band=None if best_link is None else best_link.band,
+            best_configured_width_mhz=None if best_link is None else best_link.configured_width_mhz,
+            best_effective_width_mhz=None if best_link is None else best_link.effective_width_mhz,
             best_rssi_dbm=None if best_link is None else best_link.rssi_dbm,
+            best_noise_floor_dbm=None if best_link is None else best_link.noise_floor_dbm,
             best_snr_db=None if best_link is None else best_link.snr_db,
             best_sinr_db=None if best_link is None else best_link.sinr_db,
             status_summary="No same-band enabled links" if best_link is None else "OK",

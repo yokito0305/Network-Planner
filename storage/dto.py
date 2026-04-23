@@ -1,13 +1,19 @@
 from dataclasses import asdict, dataclass
 
 from models.device import DeviceModel
-from models.environment import BandProfileModel, EnvironmentModel, create_default_band_profiles, create_default_environment
+from models.environment import (
+    BandProfileModel,
+    EnvironmentModel,
+    LEGACY_DEFAULT_NOISE_FLOOR_DBM,
+    create_default_band_profiles,
+    create_default_environment,
+)
 from models.enums import BandId, DeviceType, PropagationModelType
 from models.radio import DeviceLinkModel, DeviceRadioModel, create_default_link, create_default_radio
 from models.scenario import ScenarioModel
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass(slots=True)
@@ -71,7 +77,7 @@ class BandProfileDTO:
     band: str
     frequency_mhz: float
     reference_loss_db: float
-    noise_floor_dbm: float | None = None
+    manual_noise_floor_dbm: float | None = None
 
     @classmethod
     def from_model(cls, model: BandProfileModel) -> "BandProfileDTO":
@@ -79,7 +85,7 @@ class BandProfileDTO:
             band=model.band.value,
             frequency_mhz=model.frequency_mhz,
             reference_loss_db=model.reference_loss_db,
-            noise_floor_dbm=model.noise_floor_dbm,
+            manual_noise_floor_dbm=model.manual_noise_floor_dbm,
         )
 
     def to_model(self) -> BandProfileModel:
@@ -87,7 +93,7 @@ class BandProfileDTO:
             band=BandId(self.band),
             frequency_mhz=self.frequency_mhz,
             reference_loss_db=self.reference_loss_db,
-            noise_floor_dbm=self.noise_floor_dbm,
+            manual_noise_floor_dbm=self.manual_noise_floor_dbm,
         )
 
 
@@ -96,7 +102,8 @@ class EnvironmentDTO:
     propagation_model: str
     path_loss_exponent: float
     reference_distance_m: float
-    default_noise_floor_dbm: float
+    manual_global_noise_floor_dbm: float | None
+    rx_noise_figure_db: float
     band_profiles: list[BandProfileDTO]
 
     @classmethod
@@ -105,7 +112,8 @@ class EnvironmentDTO:
             propagation_model=model.propagation_model.value,
             path_loss_exponent=model.path_loss_exponent,
             reference_distance_m=model.reference_distance_m,
-            default_noise_floor_dbm=model.default_noise_floor_dbm,
+            manual_global_noise_floor_dbm=model.manual_global_noise_floor_dbm,
+            rx_noise_figure_db=model.rx_noise_figure_db,
             band_profiles=[BandProfileDTO.from_model(profile) for profile in model.band_profiles],
         )
 
@@ -114,7 +122,8 @@ class EnvironmentDTO:
             propagation_model=PropagationModelType(self.propagation_model),
             path_loss_exponent=self.path_loss_exponent,
             reference_distance_m=self.reference_distance_m,
-            default_noise_floor_dbm=self.default_noise_floor_dbm,
+            manual_global_noise_floor_dbm=self.manual_global_noise_floor_dbm,
+            rx_noise_figure_db=self.rx_noise_figure_db,
             band_profiles=[profile.to_model() for profile in self.band_profiles],
         )
 
@@ -196,11 +205,13 @@ class ScenarioDTO:
                 devices=[cls._device_dto_from_payload_v1(device_payload) for device_payload in scenario["devices"]],
                 environment=EnvironmentDTO.from_model(create_default_environment()),
             )
+        if schema_version not in (2, 3):
+            raise ValueError(f"Unsupported schema version: {schema_version}")
         return schema_version, cls(
             width_m=float(scenario["width_m"]),
             height_m=float(scenario["height_m"]),
             devices=[cls._device_dto_from_payload_v2(device_payload) for device_payload in scenario["devices"]],
-            environment=cls._environment_dto_from_payload(scenario.get("environment")),
+            environment=cls._environment_dto_from_payload(scenario.get("environment"), schema_version),
         )
 
     @staticmethod
@@ -262,7 +273,10 @@ class ScenarioDTO:
         )
 
     @staticmethod
-    def _environment_dto_from_payload(environment_payload: dict | None) -> EnvironmentDTO:
+    def _environment_dto_from_payload(
+        environment_payload: dict | None,
+        schema_version: int,
+    ) -> EnvironmentDTO:
         default_environment = create_default_environment()
         if environment_payload is None:
             return EnvironmentDTO.from_model(default_environment)
@@ -273,13 +287,33 @@ class ScenarioDTO:
             band_profiles = [BandProfileDTO.from_model(profile) for profile in default_environment.band_profiles]
         else:
             band_profiles = [
-                ScenarioDTO._band_profile_dto_from_payload(profile_payload, band_profile_defaults)
+                ScenarioDTO._band_profile_dto_from_payload(
+                    profile_payload,
+                    band_profile_defaults,
+                    schema_version,
+                )
                 for profile_payload in band_profiles_payload
             ]
             existing_bands = {profile.band for profile in band_profiles}
             for default_profile in default_environment.band_profiles:
                 if default_profile.band.value not in existing_bands:
                     band_profiles.append(BandProfileDTO.from_model(default_profile))
+
+        manual_global_noise_floor_dbm = default_environment.manual_global_noise_floor_dbm
+        rx_noise_figure_db = default_environment.rx_noise_figure_db
+        if schema_version >= 3:
+            manual_global_noise_floor_dbm = environment_payload.get("manual_global_noise_floor_dbm")
+            if manual_global_noise_floor_dbm is not None:
+                manual_global_noise_floor_dbm = float(manual_global_noise_floor_dbm)
+            rx_noise_figure_db = float(
+                environment_payload.get("rx_noise_figure_db", default_environment.rx_noise_figure_db)
+            )
+        else:
+            legacy_default_noise_floor = float(
+                environment_payload.get("default_noise_floor_dbm", LEGACY_DEFAULT_NOISE_FLOOR_DBM)
+            )
+            if legacy_default_noise_floor != LEGACY_DEFAULT_NOISE_FLOOR_DBM:
+                manual_global_noise_floor_dbm = legacy_default_noise_floor
 
         return EnvironmentDTO(
             propagation_model=environment_payload.get(
@@ -292,9 +326,8 @@ class ScenarioDTO:
             reference_distance_m=float(
                 environment_payload.get("reference_distance_m", default_environment.reference_distance_m)
             ),
-            default_noise_floor_dbm=float(
-                environment_payload.get("default_noise_floor_dbm", default_environment.default_noise_floor_dbm)
-            ),
+            manual_global_noise_floor_dbm=manual_global_noise_floor_dbm,
+            rx_noise_figure_db=rx_noise_figure_db,
             band_profiles=band_profiles,
         )
 
@@ -302,14 +335,28 @@ class ScenarioDTO:
     def _band_profile_dto_from_payload(
         profile_payload: dict,
         band_profile_defaults: dict[str, BandProfileModel],
+        schema_version: int,
     ) -> BandProfileDTO:
         band = profile_payload["band"]
         default_profile = band_profile_defaults[band]
+        manual_noise_floor_dbm: float | None
+        if schema_version >= 3:
+            manual_noise_floor_dbm = profile_payload.get(
+                "manual_noise_floor_dbm",
+                default_profile.manual_noise_floor_dbm,
+            )
+        else:
+            manual_noise_floor_dbm = profile_payload.get(
+                "noise_floor_dbm",
+                default_profile.manual_noise_floor_dbm,
+            )
+        if manual_noise_floor_dbm is not None:
+            manual_noise_floor_dbm = float(manual_noise_floor_dbm)
         return BandProfileDTO(
             band=band,
             frequency_mhz=float(profile_payload.get("frequency_mhz", default_profile.frequency_mhz)),
             reference_loss_db=float(
                 profile_payload.get("reference_loss_db", default_profile.reference_loss_db)
             ),
-            noise_floor_dbm=profile_payload.get("noise_floor_dbm", default_profile.noise_floor_dbm),
+            manual_noise_floor_dbm=manual_noise_floor_dbm,
         )

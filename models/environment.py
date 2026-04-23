@@ -5,7 +5,8 @@ from models.enums import BandId, PropagationModelType
 
 DEFAULT_PATH_LOSS_EXPONENT = 3.0
 DEFAULT_REFERENCE_DISTANCE_M = 1.0
-DEFAULT_NOISE_FLOOR_DBM = -93.97
+LEGACY_DEFAULT_NOISE_FLOOR_DBM = -93.97
+DEFAULT_RX_NOISE_FIGURE_DB = 7.0
 
 
 def create_default_band_profiles() -> list["BandProfileModel"]:
@@ -33,7 +34,8 @@ def create_default_environment() -> "EnvironmentModel":
         propagation_model=PropagationModelType.LOG_DISTANCE,
         path_loss_exponent=DEFAULT_PATH_LOSS_EXPONENT,
         reference_distance_m=DEFAULT_REFERENCE_DISTANCE_M,
-        default_noise_floor_dbm=DEFAULT_NOISE_FLOOR_DBM,
+        manual_global_noise_floor_dbm=None,
+        rx_noise_figure_db=DEFAULT_RX_NOISE_FIGURE_DB,
         band_profiles=create_default_band_profiles(),
     )
 
@@ -43,7 +45,7 @@ class BandProfileModel:
     band: BandId
     frequency_mhz: float
     reference_loss_db: float
-    noise_floor_dbm: float | None = None
+    manual_noise_floor_dbm: float | None = None
 
 
 @dataclass(slots=True)
@@ -51,5 +53,6 @@ class EnvironmentModel:
     propagation_model: PropagationModelType = PropagationModelType.LOG_DISTANCE
     path_loss_exponent: float = DEFAULT_PATH_LOSS_EXPONENT
     reference_distance_m: float = DEFAULT_REFERENCE_DISTANCE_M
-    default_noise_floor_dbm: float = DEFAULT_NOISE_FLOOR_DBM
+    manual_global_noise_floor_dbm: float | None = None
+    rx_noise_figure_db: float = DEFAULT_RX_NOISE_FIGURE_DB
     band_profiles: list[BandProfileModel] = field(default_factory=create_default_band_profiles)

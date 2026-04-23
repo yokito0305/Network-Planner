@@ -1,6 +1,7 @@
 import unittest
 
 from models.device import DeviceModel
+from models.environment import EnvironmentModel
 from models.enums import BandId, DeviceType
 from models.radio import DeviceLinkModel, DeviceRadioModel
 from models.scenario import ScenarioModel
@@ -59,6 +60,9 @@ class RelationCalculationServiceTests(unittest.TestCase):
         self.assertEqual(peer_relation.links[0].selected_link_id, "sel-5g")
         self.assertEqual(peer_relation.links[0].peer_link_id, "peer-5g")
         self.assertAlmostEqual(peer_relation.distance_m, 5.0)
+        self.assertEqual(peer_relation.links[0].configured_width_mhz, 80)
+        self.assertEqual(peer_relation.links[0].effective_width_mhz, 80)
+        self.assertEqual(peer_relation.links[0].noise_source, "nf_formula")
 
     def test_build_snapshot_returns_only_selected_to_peer_direction(self) -> None:
         selected_device = DeviceModel(
@@ -87,6 +91,44 @@ class RelationCalculationServiceTests(unittest.TestCase):
         snapshot = self.service.build_snapshot(scenario, selected_device_id="selected")
 
         self.assertEqual([peer.peer_device_id for peer in snapshot.peers], ["peer-a", "peer-b"])
+
+    def test_build_snapshot_uses_min_pair_width_and_global_override(self) -> None:
+        selected_device = DeviceModel(
+            id="selected",
+            name="AP-1",
+            device_type=DeviceType.AP,
+            x_m=0.0,
+            y_m=0.0,
+            radio=DeviceRadioModel(
+                links=[
+                    DeviceLinkModel("sel-5g", "5G", True, BandId.BAND_5G, channel_width_mhz=160),
+                ],
+            ),
+        )
+        peer_device = DeviceModel(
+            id="peer",
+            name="STA-1",
+            device_type=DeviceType.STA,
+            x_m=1.0,
+            y_m=0.0,
+            radio=DeviceRadioModel(
+                links=[
+                    DeviceLinkModel("peer-5g", "Peer 5G", True, BandId.BAND_5G, channel_width_mhz=40),
+                ],
+            ),
+        )
+        scenario = ScenarioModel(
+            devices=[selected_device, peer_device],
+            environment=EnvironmentModel(manual_global_noise_floor_dbm=-90.0),
+        )
+
+        snapshot = self.service.build_snapshot(scenario, selected_device_id="selected")
+
+        link = snapshot.peers[0].links[0]
+        self.assertEqual(link.configured_width_mhz, 40)
+        self.assertEqual(link.effective_width_mhz, 40)
+        self.assertEqual(link.noise_floor_dbm, -90.0)
+        self.assertEqual(link.noise_source, "manual_global_override")
 
 
 if __name__ == "__main__":

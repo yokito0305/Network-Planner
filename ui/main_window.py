@@ -62,13 +62,13 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.palette = LeftPalette()
+        self.left_palette = LeftPalette()
         self.panel = PropertyPanel()
 
         # Replace fixed-width boxes with a draggable splitter
         splitter = QSplitter()
         splitter.setHandleWidth(5)
-        splitter.addWidget(self.palette)
+        splitter.addWidget(self.left_palette)
         splitter.addWidget(self.view)
         splitter.addWidget(self.panel)
 
@@ -76,7 +76,7 @@ class MainWindow(QMainWindow):
         splitter.setSizes([150, 820, 430])
 
         # Allow the canvas to expand freely; palette/panel have min widths
-        self.palette.setMinimumWidth(120)
+        self.left_palette.setMinimumWidth(120)
         self.panel.setMinimumWidth(380)
         splitter.setStretchFactor(0, 0)   # palette — don't stretch
         splitter.setStretchFactor(1, 1)   # canvas  — absorb extra space
@@ -124,11 +124,11 @@ class MainWindow(QMainWindow):
 
     def _wire_events(self) -> None:
         # ── Palette ────────────────────────────────────────────────────────
-        self.palette.add_requested.connect(self._add_device_at_view_center)
-        self.palette.node_list.selection_requested.connect(
+        self.left_palette.add_requested.connect(self._add_device_at_view_center)
+        self.left_palette.node_list.selection_requested.connect(
             self.selection_service.set_selected_device_id
         )
-        self.palette.node_list.lock_toggled.connect(self._on_lock_toggled)
+        self.left_palette.node_list.lock_toggled.connect(self._on_lock_toggled)
 
         # ── Selection changes → refresh device panel + relations ───────────
         self.selection_service.selection_changed.connect(
@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
         self.scenario_service.device_updated.connect(lambda _d: self._refresh_node_list())
         self.scenario_service.scenario_replaced.connect(self._refresh_node_list)
         self.selection_service.selection_changed.connect(
-            lambda dev_id: self.palette.node_list.set_selected(dev_id)
+            lambda dev_id: self.left_palette.node_list.set_selected(dev_id)
         )
 
         # ── Scenario replaced → full refresh ───────────────────────────────
@@ -169,7 +169,9 @@ class MainWindow(QMainWindow):
         self.panel.wifi_tab.link_removed.connect(self._on_link_removed)
         self.panel.wifi_tab.link_name_changed.connect(self._on_link_name_changed)
         self.panel.wifi_tab.link_enabled_changed.connect(self._on_link_enabled_changed)
+        self.panel.wifi_tab.link_width_changed.connect(self._on_link_width_changed)
         self.panel.wifi_tab.link_band_changed.connect(self._on_link_band_changed)
+        self.panel.wifi_tab.link_bandwidth_changed.connect(self._on_link_bandwidth_changed)
 
         # ── Calculator tab: add node from coordinate ──────────────────────
         self.panel.calculator_tab.add_node_requested.connect(self._add_device_from_calc)
@@ -181,8 +183,11 @@ class MainWindow(QMainWindow):
         self.panel.summary_tab.reference_distance_changed.connect(
             self.scenario_service.set_reference_distance_m
         )
-        self.panel.summary_tab.noise_floor_changed.connect(
-            self.scenario_service.set_default_noise_floor_dbm
+        self.panel.summary_tab.manual_noise_floor_override_changed.connect(
+            self.scenario_service.set_manual_global_noise_floor_dbm
+        )
+        self.panel.summary_tab.rx_noise_figure_changed.connect(
+            self.scenario_service.set_rx_noise_figure_db
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -196,7 +201,7 @@ class MainWindow(QMainWindow):
         if self._locked_device_id is not None:
             if self.scenario_service.get_device(self._locked_device_id) is None:
                 self._locked_device_id = None
-                self.palette.node_list.set_locked(False)
+                self.left_palette.node_list.set_locked(False)
         # Right-side panel only updates when NOT locked
         if self._locked_device_id is None:
             self._schedule_selection_refresh()
@@ -236,7 +241,7 @@ class MainWindow(QMainWindow):
         # Unlock on scenario replacement (old device IDs are invalid)
         if self._locked_device_id is not None:
             self._locked_device_id = None
-            self.palette.node_list.set_locked(False)
+            self.left_palette.node_list.set_locked(False)
         self._update_status_bar_selection()
         self._refresh_selected_device()
         self._refresh_summary()
@@ -291,7 +296,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._do_refresh_node_list)
 
     def _do_refresh_node_list(self) -> None:
-        self.palette.node_list.refresh(self.scenario_service.list_devices())
+        self.left_palette.node_list.refresh(self.scenario_service.list_devices())
 
     def _refresh_relations(self) -> None:
         snapshot = self._relation_service.build_snapshot(
@@ -352,9 +357,27 @@ class MainWindow(QMainWindow):
             self.scenario_service.update_device_link(device_id, link_id, enabled=enabled)
 
     def _on_link_band_changed(self, link_id: str, band: BandId) -> None:
+        # Atomic band+width updates use _on_link_bandwidth_changed instead.
+        del link_id, band
+
+    def _on_link_bandwidth_changed(self, link_id: str, band: BandId, channel_width_mhz: int) -> None:
         device_id = self.selection_service.selected_device_id
         if device_id is not None:
-            self.scenario_service.update_device_link(device_id, link_id, band=band)
+            self.scenario_service.update_device_link(
+                device_id,
+                link_id,
+                band=band,
+                channel_width_mhz=channel_width_mhz,
+            )
+
+    def _on_link_width_changed(self, link_id: str, channel_width_mhz: int) -> None:
+        device_id = self.selection_service.selected_device_id
+        if device_id is not None:
+            self.scenario_service.update_device_link(
+                device_id,
+                link_id,
+                channel_width_mhz=channel_width_mhz,
+            )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Status bar

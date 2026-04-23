@@ -376,24 +376,42 @@ class CalculatorTab(QWidget):
         band_row.addWidget(QLabel("Band:"))
         self._band_combo = QComboBox()
         for band, lbl in _BAND_LABELS.items():
-            self._band_combo.addItem(lbl, band)
+            self._band_combo.addItem(lbl, band.name)
         self._band_combo.setCurrentIndex(1)   # default 5 GHz
         band_row.addWidget(self._band_combo, stretch=1)
         env_layout.addLayout(band_row)
+
+        width_row = QHBoxLayout()
+        width_row.addWidget(QLabel("Configured Width:"))
+        self._width_combo = QComboBox()
+        width_row.addWidget(self._width_combo, stretch=1)
+        env_layout.addLayout(width_row)
+
+        self._width_hint = QLabel("Effective Measurement Width: —")
+        self._width_hint.setStyleSheet("color:#64748B; font-size:10px;")
+        self._width_hint.setToolTip(
+            "First-pass ns-3 alignment: effective measurement width currently equals "
+            "configured width. HE-specific fallback rules are not modeled yet."
+        )
+        env_layout.addWidget(self._width_hint)
+
+        self._noise_source_hint = QLabel("Noise Source: —")
+        self._noise_source_hint.setStyleSheet("color:#64748B; font-size:10px;")
+        env_layout.addWidget(self._noise_source_hint)
 
         self._env_hint = QLabel("（尚未連接場景）")
         self._env_hint.setStyleSheet("color:#64748B; font-size:10px;")
         self._env_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         env_layout.addWidget(self._env_hint)
 
-        btn_import = QPushButton("匯入  ref_dist / ref_loss / n / noise_floor")
+        btn_import = QPushButton("匯入  ref_dist / ref_loss / n / resolved_noise_floor")
         btn_import.setMaximumHeight(26)
         btn_import.setToolTip(
             "從目前場景的環境設定匯入：\n"
             "  • Ref. Distance (d₀)\n"
             "  • Ref. Loss (PL₀)  ← 依選擇的 Band\n"
             "  • Path Loss Exp. (n)\n"
-            "  • Noise Floor  ← 優先使用 Band 的值，否則用全域預設\n\n"
+            "  • Resolved Noise Floor  ← Band override / global override / NF+width\n\n"
             "注意：TX Power 為 per-device 參數（各裝置獨立設定），\n"
             "不屬於環境參數，故不在匯入範圍內。"
         )
@@ -425,9 +443,12 @@ class CalculatorTab(QWidget):
         self._solve_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._coord_mode_combo.currentIndexChanged.connect(self._on_coord_mode_changed)
         self._add_coord_combo.currentIndexChanged.connect(self._update_add_coord_preview)
+        self._band_combo.currentIndexChanged.connect(self._on_band_changed)
+        self._width_combo.currentIndexChanged.connect(self._on_width_changed)
 
         # Initial render
         self._on_coord_mode_changed(0)   # sets row visibility + recalcs coord + rebuilds add-combo
+        self._sync_band_width_controls()
         self._on_mode_changed(0)         # triggers _apply_mode + _recalc
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -443,6 +464,8 @@ class CalculatorTab(QWidget):
         else:
             self._env_hint.setText("（尚未連接場景）")
             self._env_hint.setStyleSheet("color:#64748B; font-size:10px;")
+        self._sync_band_width_controls()
+        self._refresh_noise_preview()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Coord sub-mode management
@@ -749,7 +772,8 @@ class CalculatorTab(QWidget):
         if self._env is None:
             return
 
-        selected_band: BandId = self._band_combo.currentData()
+        selected_band = BandId[self._band_combo.currentData()]
+        configured_width_mhz = self._width_combo.currentData()
         bp = next(
             (b for b in self._env.band_profiles if b.band == selected_band), None
         )
@@ -762,10 +786,14 @@ class CalculatorTab(QWidget):
         self._v_d0.set_value(self._env.reference_distance_m)
         self._v_n.set_value(self._env.path_loss_exponent)
 
-        noise = (
-            bp.noise_floor_dbm
-            if bp is not None and bp.noise_floor_dbm is not None
-            else self._env.default_noise_floor_dbm
+        effective_width_mhz = self._calc.resolve_effective_measurement_width_mhz(
+            configured_width_mhz
+        )
+        noise, noise_source = self._calc.resolve_noise_floor_dbm(
+            bp.manual_noise_floor_dbm if bp is not None else None,
+            self._env.manual_global_noise_floor_dbm,
+            effective_width_mhz,
+            self._env.rx_noise_figure_db,
         )
         self._v_nf.set_value(noise)
 
@@ -775,7 +803,56 @@ class CalculatorTab(QWidget):
         for sp in targets:
             sp.blockSignals(False)
 
+        self._width_hint.setText(
+            f"Effective Measurement Width: {effective_width_mhz} MHz"
+        )
+        self._noise_source_hint.setText(f"Noise Source: {noise_source}")
         self._recalc()
+
+    def _on_band_changed(self, _index: int) -> None:
+        self._sync_band_width_controls()
+        self._refresh_noise_preview()
+
+    def _on_width_changed(self, _index: int) -> None:
+        self._refresh_noise_preview()
+
+    def _sync_band_width_controls(self) -> None:
+        band = BandId[self._band_combo.currentData()]
+        allowed = self._calc.allowed_channel_widths_for_band(band)
+        current = self._width_combo.currentData()
+        normalized = self._calc.normalize_channel_width_for_band(current, band)
+        self._width_combo.blockSignals(True)
+        self._width_combo.clear()
+        for width_mhz in allowed:
+            self._width_combo.addItem(f"{width_mhz} MHz", width_mhz)
+        idx = self._width_combo.findData(normalized)
+        self._width_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._width_combo.blockSignals(False)
+
+    def _refresh_noise_preview(self) -> None:
+        band = BandId[self._band_combo.currentData()]
+        configured_width_mhz = self._width_combo.currentData()
+        if configured_width_mhz is None:
+            self._width_hint.setText("Effective Measurement Width: —")
+            self._noise_source_hint.setText("Noise Source: —")
+            return
+        effective_width_mhz = self._calc.resolve_effective_measurement_width_mhz(
+            configured_width_mhz
+        )
+        self._width_hint.setText(
+            f"Effective Measurement Width: {effective_width_mhz} MHz"
+        )
+        if self._env is None:
+            self._noise_source_hint.setText("Noise Source: —")
+            return
+        bp = next((b for b in self._env.band_profiles if b.band == band), None)
+        _, noise_source = self._calc.resolve_noise_floor_dbm(
+            bp.manual_noise_floor_dbm if bp is not None else None,
+            self._env.manual_global_noise_floor_dbm,
+            effective_width_mhz,
+            self._env.rx_noise_figure_db,
+        )
+        self._noise_source_hint.setText(f"Noise Source: {noise_source}")
 
 
 # ── Module-level helper ───────────────────────────────────────────────────────

@@ -119,8 +119,12 @@ class ScenarioService(QObject):
         self.scenario.environment.reference_distance_m = value
         self.environment_changed.emit()
 
-    def set_default_noise_floor_dbm(self, value: float) -> None:
-        self.scenario.environment.default_noise_floor_dbm = value
+    def set_manual_global_noise_floor_dbm(self, value: float | None) -> None:
+        self.scenario.environment.manual_global_noise_floor_dbm = value
+        self.environment_changed.emit()
+
+    def set_rx_noise_figure_db(self, value: float) -> None:
+        self.scenario.environment.rx_noise_figure_db = value
         self.environment_changed.emit()
 
     def update_band_profile(
@@ -173,6 +177,7 @@ class ScenarioService(QObject):
         name: str | None = None,
         enabled: bool | None = None,
         band: BandId | None = None,
+        channel_width_mhz: int | None = None,
     ) -> bool:
         """Update fields on an existing link. Returns False if device or link not found."""
         device = self.get_device(device_id)
@@ -186,6 +191,8 @@ class ScenarioService(QObject):
                     lnk.enabled = enabled
                 if band is not None:
                     lnk.band = band
+                if channel_width_mhz is not None:
+                    lnk.channel_width_mhz = channel_width_mhz
                 self.device_updated.emit(device)
                 return True
         return False

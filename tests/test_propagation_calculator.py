@@ -35,6 +35,27 @@ class PropagationCalculatorTests(unittest.TestCase):
         snr_db = PropagationCalculator.compute_snr_db(rssi_dbm=-50.0, noise_floor_dbm=-93.97)
         self.assertAlmostEqual(snr_db, 43.97)
 
+    def test_compute_thermal_noise_floor_dbm_matches_ns3_style_nf_formula(self) -> None:
+        noise_20 = PropagationCalculator.compute_thermal_noise_floor_dbm(20, 7.0)
+        noise_40 = PropagationCalculator.compute_thermal_noise_floor_dbm(40, 7.0)
+        noise_80 = PropagationCalculator.compute_thermal_noise_floor_dbm(80, 7.0)
+        noise_160 = PropagationCalculator.compute_thermal_noise_floor_dbm(160, 7.0)
+        self.assertAlmostEqual(noise_20, -93.97, places=1)
+        self.assertAlmostEqual(noise_40 - noise_20, 3.01, places=1)
+        self.assertAlmostEqual(noise_80 - noise_40, 3.01, places=1)
+        self.assertAlmostEqual(noise_160 - noise_80, 3.01, places=1)
+
+    def test_resolve_noise_floor_prefers_band_then_global_then_formula(self) -> None:
+        noise_band, source_band = PropagationCalculator.resolve_noise_floor_dbm(-88.0, -91.0, 80, 7.0)
+        self.assertEqual((noise_band, source_band), (-88.0, "manual_band_override"))
+
+        noise_global, source_global = PropagationCalculator.resolve_noise_floor_dbm(None, -91.0, 80, 7.0)
+        self.assertEqual((noise_global, source_global), (-91.0, "manual_global_override"))
+
+        noise_formula, source_formula = PropagationCalculator.resolve_noise_floor_dbm(None, None, 80, 7.0)
+        self.assertEqual(source_formula, "nf_formula")
+        self.assertAlmostEqual(noise_formula, -87.95, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()
