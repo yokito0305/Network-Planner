@@ -40,8 +40,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from models.device import DeviceModel
 from models.environment import EnvironmentModel
 from models.enums import BandId, DeviceType
+from services.fsr_lookup import all_mcs_fsr
 from services.propagation_calculator import PropagationCalculator
 
 # Sentinel — indicates no import has been performed yet
@@ -197,6 +199,10 @@ class CalculatorTab(QWidget):
         # Set by _import_from_env(); None until the user clicks "匯入".
         self._imported_band: BandId | None = None
         self._imported_width_mhz: int | None = None
+
+        # Set by set_device(); used by MCS Advisor for band/width lookup.
+        self._device_band: BandId | None = None
+        self._device_width_mhz: int | None = None
 
         # ── outer scroll area ─────────────────────────────────────────────
         outer = QVBoxLayout(self)
@@ -427,6 +433,46 @@ class CalculatorTab(QWidget):
         env_layout.addWidget(btn_import)
 
         root.addWidget(env_grp)
+
+        # ── Section 6: MCS Advisor ────────────────────────────────────────
+        mcs_grp = QGroupBox("📊  MCS Advisor（FSR 查表）")
+        mcs_grp.setCheckable(True)
+        mcs_grp.setChecked(False)   # collapsed by default
+        mcs_layout = QVBoxLayout(mcs_grp)
+        mcs_layout.setSpacing(4)
+        mcs_layout.setContentsMargins(6, 6, 6, 6)
+
+        # Source hint label
+        self._mcs_src_hint = QLabel("裝置：未選取")
+        self._mcs_src_hint.setStyleSheet("color:#64748B; font-size:10px;")
+        mcs_layout.addWidget(self._mcs_src_hint)
+
+        # Table header
+        from PySide6.QtWidgets import QTableWidget, QHeaderView
+        self._mcs_table = QTableWidget(14, 3)
+        self._mcs_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._mcs_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._mcs_table.setHorizontalHeaderLabels(["MCS", "調變", "FSR"])
+        self._mcs_table.verticalHeader().setVisible(False)
+        self._mcs_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self._mcs_table.setMaximumHeight(340)
+        mcs_layout.addWidget(self._mcs_table)
+
+        # Recommended MCS label
+        self._mcs_recommend_lbl = QLabel("")
+        self._mcs_recommend_lbl.setStyleSheet(
+            "color:#34D399; font-weight:bold; font-size:11px;"
+        )
+        self._mcs_recommend_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mcs_layout.addWidget(self._mcs_recommend_lbl)
+
+        root.addWidget(mcs_grp)
+        self._mcs_grp = mcs_grp
+        # Refresh advisor when expanded
+        mcs_grp.toggled.connect(lambda checked: self._refresh_mcs_advisor() if checked else None)
+
         root.addStretch(1)
 
         scroll.setWidget(container)
@@ -454,8 +500,9 @@ class CalculatorTab(QWidget):
         self._band_combo.currentIndexChanged.connect(self._on_band_changed)
         self._width_combo.currentIndexChanged.connect(self._on_width_changed)
 
-        # Initial render
-        self._on_coord_mode_changed(0)   # sets row visibility + recalcs coord + rebuilds add-combo
+        # Initial render — default to polar mode (原點 + 角度/距離 → 目標座標)
+        self._coord_mode_combo.setCurrentIndex(_CM_POLAR)
+        self._on_coord_mode_changed(_CM_POLAR)   # sets row visibility + recalcs coord + rebuilds add-combo
         self._sync_band_width_controls()
         self._on_mode_changed(0)         # triggers _apply_mode + _recalc
 
@@ -474,6 +521,24 @@ class CalculatorTab(QWidget):
             self._env_hint.setStyleSheet("color:#64748B; font-size:10px;")
         self._sync_band_width_controls()
         self._refresh_noise_preview()
+
+    def set_device(self, device: DeviceModel | None) -> None:
+        """Store selected device's band/width for MCS Advisor lookup."""
+        if device is None or not device.radio.links:
+            self._device_band = None
+            self._device_width_mhz = None
+            self._mcs_src_hint.setText("裝置：未選取")
+        else:
+            link = device.radio.links[0]
+            self._device_band = link.band
+            self._device_width_mhz = link.channel_width_mhz
+            band_name = _BAND_LABELS.get(link.band, str(link.band))
+            width_str = f"{link.channel_width_mhz} MHz" if link.channel_width_mhz else "—"
+            self._mcs_src_hint.setText(
+                f"裝置：{device.name}  |  {band_name} / {width_str}"
+            )
+        if self._mcs_grp.isChecked():
+            self._refresh_mcs_advisor()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Coord sub-mode management
@@ -632,6 +697,10 @@ class CalculatorTab(QWidget):
         except (ValueError, ZeroDivisionError, OverflowError) as exc:
             self._show_error(str(exc))
 
+        # Refresh MCS Advisor whenever a recalc completes (if expanded)
+        if self._mcs_grp.isChecked():
+            self._refresh_mcs_advisor()
+
     def _show_derived(
         self,
         pl: float | None,
@@ -670,6 +739,98 @@ class CalculatorTab(QWidget):
         short = msg[:60] + ("…" if len(msg) > 60 else "")
         self._r_main.setText(f"⚠ {short}")
         self._r_main.setStyleSheet(_S_ERR)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # MCS Advisor
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # MCS metadata (modulation label)
+    _MCS_MOD = [
+        "BPSK 1/2", "QPSK 1/2", "QPSK 3/4",
+        "16QAM 1/2", "16QAM 3/4",
+        "64QAM 2/3", "64QAM 3/4", "64QAM 5/6",
+        "256QAM 3/4", "256QAM 5/6",
+        "1024QAM 3/4", "1024QAM 5/6",
+        "4096QAM 3/4", "4096QAM 5/6",
+    ]
+
+    def _refresh_mcs_advisor(self) -> None:
+        """Rebuild the MCS advisor table using current SNR + device band/width."""
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        snr_db = self._v_snr.value()
+        band   = self._device_band
+        width  = self._device_width_mhz
+
+        if band is None:
+            # No device selected — clear table
+            for row in range(14):
+                for col in range(3):
+                    self._mcs_table.setItem(row, col, QTableWidgetItem("—"))
+            self._mcs_recommend_lbl.setText("")
+            return
+
+        fsr_list = all_mcs_fsr(band, width, snr_db)
+
+        # Find highest MCS with FSR >= 99%
+        best_mcs = -1
+        for mcs in range(13, -1, -1):
+            if fsr_list[mcs] >= 0.99:
+                best_mcs = mcs
+                break
+
+        for mcs in range(14):
+            fsr = fsr_list[mcs]
+            pct = fsr * 100.0
+
+            # MCS column
+            mcs_item = QTableWidgetItem(f"MCS{mcs}")
+            mcs_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # Modulation column
+            mod_item = QTableWidgetItem(
+                self._MCS_MOD[mcs] if mcs < len(self._MCS_MOD) else ""
+            )
+            mod_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # FSR% column
+            fsr_item = QTableWidgetItem(f"{pct:.1f}%")
+            fsr_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # Colour coding
+            if fsr >= 0.99:
+                color = QColor("#34D399")   # green
+            elif fsr >= 0.50:
+                color = QColor("#FCD34D")   # yellow
+            else:
+                color = QColor("#F87171")   # red
+
+            for item in (mcs_item, mod_item, fsr_item):
+                item.setForeground(color)
+
+            # Highlight the recommended MCS row
+            if mcs == best_mcs:
+                bg = QColor("#1e3a2f")
+                for item in (mcs_item, mod_item, fsr_item):
+                    item.setBackground(bg)
+
+            self._mcs_table.setItem(mcs, 0, mcs_item)
+            self._mcs_table.setItem(mcs, 1, mod_item)
+            self._mcs_table.setItem(mcs, 2, fsr_item)
+
+        if best_mcs >= 0:
+            self._mcs_recommend_lbl.setText(
+                f"✅  建議 MCS：{best_mcs}（{self._MCS_MOD[best_mcs]}）"
+                f"  FSR = {fsr_list[best_mcs]*100:.1f}%  @  基於 Calculator SNR = {snr_db:.1f} dB"
+            )
+        else:
+            self._mcs_recommend_lbl.setText(
+                f"⚠  基於 Calculator SNR = {snr_db:.1f} dB，所有 MCS 的 FSR < 99%"
+            )
+            self._mcs_recommend_lbl.setStyleSheet(
+                "color:#FCD34D; font-weight:bold; font-size:11px;"
+            )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Coordinate helper

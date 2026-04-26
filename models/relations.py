@@ -19,7 +19,10 @@ class LinkRelationModel:
     noise_floor_dbm: float
     noise_source: str
     snr_db: float
-    sinr_db: float          # Signal / (Interference + Noise); equals SNR when no interferers
+    sinr_db: float
+    interference_dbm: float | None      # pure external interference (None if no interferers)
+    total_noise_dbm: float              # interference + noise floor (SINR denominator)
+    total_rx_power_dbm: float           # signal + interference (Energy Detection proxy)
     status: str
     note: str
 
@@ -31,13 +34,6 @@ class PeerRelationModel:
     peer_type: DeviceType
     distance_m: float
     link_count: int
-    best_band: BandId | None
-    best_configured_width_mhz: int | None
-    best_effective_width_mhz: int | None
-    best_rssi_dbm: float | None
-    best_noise_floor_dbm: float | None
-    best_snr_db: float | None
-    best_sinr_db: float | None  # SINR of the same best link
     status_summary: str
     links: list[LinkRelationModel] = field(default_factory=list)
 

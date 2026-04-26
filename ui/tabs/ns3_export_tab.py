@@ -24,6 +24,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -266,6 +267,94 @@ class NS3ExportTab(QWidget):
 
         root.addWidget(run_grp)
 
+        # ── Section 3b: Tracing / Output ─────────────────────────────────
+        trace_grp = QGroupBox("🔍  追蹤 / 輸出 (Tracing)")
+        trace_grp.setCheckable(True)
+        trace_grp.setChecked(False)
+        trace_form = QFormLayout(trace_grp)
+        trace_form.setSpacing(4)
+
+        hint = QLabel("只有與預設值不同的參數才會輸出到指令中。")
+        hint.setStyleSheet("color:#64748B; font-size:10px;")
+        trace_form.addRow(hint)
+
+        # ── wifi7-base 父類別參數 ──────────────────────────────────────
+        trace_form.addRow(_section_label("wifi7-base（SNR Trace）"))
+
+        self._cb_snr_trace      = _mk_check("snrTrace",      True)   # default ON
+        self._cb_snr_data_only  = _mk_check("snrDataOnly",   False)
+        self._sp_snr_target     = _mk_ispin(0, 2, 0)                  # default 0
+        self._cb_snr_per_dev    = _mk_check("snrPerDevice",  False)
+        self._cb_snr_per_chan   = _mk_check("snrPerChannel", False)
+        self._cb_snr_rx_hist    = _mk_check("snrRxModeHist", False)
+
+        for w in (self._cb_snr_trace, self._cb_snr_data_only,
+                  self._cb_snr_per_dev, self._cb_snr_per_chan, self._cb_snr_rx_hist):
+            w.stateChanged.connect(self._rebuild_output)
+        self._sp_snr_target.valueChanged.connect(self._rebuild_output)
+
+        snr_target_row = QHBoxLayout()
+        snr_target_row.addWidget(self._sp_snr_target)
+        snr_target_row.addWidget(QLabel("（0=STA, 1=AP, 2=ALL）"))
+        snr_target_row.addStretch()
+
+        trace_form.addRow("snrTrace (預設 1):",      self._cb_snr_trace)
+        trace_form.addRow("snrDataOnly (預設 0):",   self._cb_snr_data_only)
+        trace_form.addRow("snrTarget (預設 0):",     _wrap(snr_target_row))
+        trace_form.addRow("snrPerDevice (預設 0):",  self._cb_snr_per_dev)
+        trace_form.addRow("snrPerChannel (預設 0):", self._cb_snr_per_chan)
+        trace_form.addRow("snrRxModeHist (預設 0):", self._cb_snr_rx_hist)
+
+        # ── OBSS_3BSS 子類別參數 ──────────────────────────────────────
+        trace_form.addRow(_section_label("OBSS_3BSS（PHY Failure）"))
+
+        self._cb_phy_fail_stats    = _mk_check("phyFailureStats",    True)   # default ON
+        self._cb_sinr_pct          = _mk_check("sinrPercentiles",    True)   # default ON
+        self._cb_phy_fail_event    = _mk_check("phyFailureEventLog", False)
+        self._sp_phy_fail_bss      = _mk_ispin(0, 2, 0)
+
+        for w in (self._cb_phy_fail_stats, self._cb_sinr_pct, self._cb_phy_fail_event):
+            w.stateChanged.connect(self._rebuild_output)
+        self._sp_phy_fail_bss.valueChanged.connect(self._rebuild_output)
+
+        phy_bss_row = QHBoxLayout()
+        phy_bss_row.addWidget(self._sp_phy_fail_bss)
+        phy_bss_row.addWidget(QLabel("（0-2，需 phyFailureEventLog=1）"))
+        phy_bss_row.addStretch()
+
+        trace_form.addRow("phyFailureStats (預設 1):",    self._cb_phy_fail_stats)
+        trace_form.addRow("sinrPercentiles (預設 1):",    self._cb_sinr_pct)
+        trace_form.addRow("phyFailureEventLog (預設 0):", self._cb_phy_fail_event)
+        trace_form.addRow("phyFailureEventLogBss (預設 0):", _wrap(phy_bss_row))
+
+        trace_form.addRow(_section_label("OBSS_3BSS（Packet SINR Tracker）"))
+
+        self._cb_pkt_sinr_tracker  = _mk_check("packetSinrTracker",  False)
+        self._sp_pkt_sinr_win_ms   = _mk_ispin(1, 10000, 20)
+        self._cb_pkt_sinr_event    = _mk_check("packetSinrEventLog", False)
+        self._cb_pkt_sinr_win_csv  = _mk_check("packetSinrWindowCsv", True)  # default ON
+        self._cb_pkt_sinr_ap_raw   = _mk_check("packetSinrApRawEvent", False)
+
+        for w in (self._cb_pkt_sinr_tracker, self._cb_pkt_sinr_event,
+                  self._cb_pkt_sinr_win_csv, self._cb_pkt_sinr_ap_raw):
+            w.stateChanged.connect(self._rebuild_output)
+        self._sp_pkt_sinr_win_ms.valueChanged.connect(self._rebuild_output)
+
+        win_ms_row = QHBoxLayout()
+        win_ms_row.addWidget(self._sp_pkt_sinr_win_ms)
+        win_ms_row.addWidget(QLabel("ms"))
+        win_ms_row.addStretch()
+
+        trace_form.addRow("packetSinrTracker (預設 0):",   self._cb_pkt_sinr_tracker)
+        trace_form.addRow("packetSinrWindowMs (預設 20):", _wrap(win_ms_row))
+        trace_form.addRow("packetSinrEventLog (預設 0):",  self._cb_pkt_sinr_event)
+        trace_form.addRow("packetSinrWindowCsv (預設 1):", self._cb_pkt_sinr_win_csv)
+        trace_form.addRow("packetSinrApRawEvent (預設 0):", self._cb_pkt_sinr_ap_raw)
+
+        trace_grp.toggled.connect(self._rebuild_output)
+        self._trace_grp = trace_grp
+        root.addWidget(trace_grp)
+
         # ── Section 4: 輸出目錄 ───────────────────────────────────────────
         out_grp = QGroupBox("📁  輸出目錄")
         out_form = QFormLayout(out_grp)
@@ -369,7 +458,7 @@ class NS3ExportTab(QWidget):
 
     def _rebuild_ap_combos(self) -> None:
         aps = self._aps()
-        # Save current selections by device id
+        # Save current manual selections by device id
         current_ids: list[str | None] = []
         for cb in self._bss_ap_combo:
             data = cb.currentData()
@@ -386,11 +475,18 @@ class NS3ExportTab(QWidget):
                 )
             cb.blockSignals(False)
 
-        # Restore previous selections where still valid
+        # Auto-select AP from bss_id, fall back to previous manual selection
         valid_ids = {ap.id for ap in aps}
-        for cb, prev_id in zip(self._bss_ap_combo, current_ids):
-            if prev_id in valid_ids:
-                idx = cb.findData(prev_id)
+        bss_labels = ["BSS0", "BSS1", "BSS2"]
+        for bss_idx, (cb, prev_id) in enumerate(zip(self._bss_ap_combo, current_ids)):
+            # Try to find an AP whose bss_id matches this BSS label
+            auto_ap = next(
+                (ap for ap in aps if (ap.bss_id or "").upper() == bss_labels[bss_idx].upper()),
+                None,
+            )
+            target_id = auto_ap.id if auto_ap else (prev_id if prev_id in valid_ids else None)
+            if target_id:
+                idx = cb.findData(target_id)
                 if idx >= 0:
                     cb.setCurrentIndex(idx)
 
@@ -426,6 +522,21 @@ class NS3ExportTab(QWidget):
                 )
                 self._sta_combos[sta.id] = cb
                 self._sta_rows_layout.addRow(f"{sta.name}:", cb)
+
+        # Auto-select BSS from device.bss_id (only for newly added or unset combos)
+        bss_label_to_idx = {lbl.upper(): i for i, lbl in enumerate(_BSS_LABELS)}
+        for sta in stas:
+            cb = self._sta_combos.get(sta.id)
+            if cb is None:
+                continue
+            # Only auto-set if currently unassigned and device has a bss_id
+            if cb.currentData() is None and sta.bss_id:
+                auto_idx = bss_label_to_idx.get(sta.bss_id.upper())
+                if auto_idx is not None:
+                    cb.blockSignals(True)
+                    cb.setCurrentIndex(auto_idx + 1)  # +1 because index 0 is _UNASSIGNED
+                    cb.blockSignals(False)
+                    self._sta_bss[sta.id] = auto_idx
 
         # Update visibility hint
         if stas:
@@ -687,6 +798,50 @@ class NS3ExportTab(QWidget):
                 f"--offTimeDist={offtdist}",
             ]
 
+        # Tracing params — only emit when different from default
+        if self._trace_grp.isChecked():
+            def _b(cb: QCheckBox) -> int:
+                return 1 if cb.isChecked() else 0
+
+            # wifi7-base SNR trace
+            if not self._cb_snr_trace.isChecked():       # default=1 → emit if 0
+                parts.append("--snrTrace=0")
+            if self._cb_snr_data_only.isChecked():        # default=0 → emit if 1
+                parts.append("--snrDataOnly=1")
+            snr_tgt = self._sp_snr_target.value()
+            if snr_tgt != 0:                              # default=0
+                parts.append(f"--snrTarget={snr_tgt}")
+            if self._cb_snr_per_dev.isChecked():          # default=0
+                parts.append("--snrPerDevice=1")
+            if self._cb_snr_per_chan.isChecked():          # default=0
+                parts.append("--snrPerChannel=1")
+            if self._cb_snr_rx_hist.isChecked():           # default=0
+                parts.append("--snrRxModeHist=1")
+
+            # OBSS_3BSS PHY failure
+            if not self._cb_phy_fail_stats.isChecked():   # default=1
+                parts.append("--phyFailureStats=0")
+            if not self._cb_sinr_pct.isChecked():          # default=1
+                parts.append("--sinrPercentiles=0")
+            if self._cb_phy_fail_event.isChecked():        # default=0
+                parts.append("--phyFailureEventLog=1")
+            phy_bss = self._sp_phy_fail_bss.value()
+            if phy_bss != 0:                               # default=0
+                parts.append(f"--phyFailureEventLogBss={phy_bss}")
+
+            # OBSS_3BSS Packet SINR Tracker
+            if self._cb_pkt_sinr_tracker.isChecked():      # default=0
+                parts.append("--packetSinrTracker=1")
+            win_ms = self._sp_pkt_sinr_win_ms.value()
+            if win_ms != 20:                               # default=20
+                parts.append(f"--packetSinrWindowMs={win_ms}")
+            if self._cb_pkt_sinr_event.isChecked():        # default=0
+                parts.append("--packetSinrEventLog=1")
+            if not self._cb_pkt_sinr_win_csv.isChecked():  # default=1
+                parts.append("--packetSinrWindowCsv=0")
+            if self._cb_pkt_sinr_ap_raw.isChecked():       # default=0
+                parts.append("--packetSinrApRawEvent=1")
+
         base_args = " ".join(parts)
         self._base_args_edit.setPlainText(base_args)
 
@@ -722,9 +877,23 @@ class NS3ExportTab(QWidget):
         QApplication.clipboard().setText(self._full_cmd_edit.toPlainText())
 
 
-# ── Module helper ─────────────────────────────────────────────────────────────
+# ── Module helpers ────────────────────────────────────────────────────────────
 def _wrap(layout: QHBoxLayout) -> QWidget:
     w = QWidget()
     w.setLayout(layout)
     w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return w
+
+
+def _mk_check(name: str, default_on: bool) -> QCheckBox:
+    """Checkbox pre-set to its ns-3 default value."""
+    cb = QCheckBox()
+    cb.setChecked(default_on)
+    return cb
+
+
+def _section_label(text: str) -> QLabel:
+    """Small bold separator label for grouping inside a form layout."""
+    lbl = QLabel(f"<b>{text}</b>")
+    lbl.setStyleSheet("color:#475569; font-size:10px; margin-top:4px;")
+    return lbl

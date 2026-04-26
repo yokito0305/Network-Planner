@@ -1,3 +1,5 @@
+import math
+
 from models.device import DeviceModel
 from models.environment import BandProfileModel
 from models.enums import BandId
@@ -86,14 +88,27 @@ class RelationCalculationService:
                 )
                 snr_db = self.propagation_calculator.compute_snr_db(rssi_dbm, noise_floor_dbm)
 
-                # ── SINR: gather interference from other transmitters on the
-                #    same band arriving at the peer device's location ─────────
-                interference_rssi: list[float] = []
+                # ── SINR: BSS-grouped interference at peer_device location ───
+                # For each BSS that differs from peer_device's BSS, find the
+                # single strongest interferer in that BSS, then sum those
+                # per-BSS maximums (in linear mW) as the total interference.
+                #
+                # If BSS IDs are not assigned, fall back to treating every
+                # interferer independently (original behaviour).
+                peer_bss = peer_device.bss_id  # may be None
+
+                # Collect per-interferer RSSI at peer_device
+                interferer_rssi_by_bss: dict[str, list[float]] = {}
+                no_bss_rssi: list[float] = []
+
                 for interferer in interferers:
                     if not any(
                         lnk.enabled and lnk.band == selected_link.band
                         for lnk in interferer.radio.links
                     ):
+                        continue
+                    # Skip same-BSS devices — they are signal allies, not interferers
+                    if peer_bss and interferer.bss_id == peer_bss:
                         continue
                     dist_i = self.propagation_calculator.compute_distance_m(
                         interferer.x_m, interferer.y_m,
@@ -111,10 +126,38 @@ class RelationCalculationService:
                         tx_gain_dbi=interferer.radio.tx_antenna_gain_dbi,
                         rx_gain_dbi=peer_device.radio.rx_antenna_gain_dbi,
                     )
-                    interference_rssi.append(rssi_i)
+                    bss_key = interferer.bss_id
+                    if bss_key:
+                        interferer_rssi_by_bss.setdefault(bss_key, []).append(rssi_i)
+                    else:
+                        no_bss_rssi.append(rssi_i)
+
+                # Sum: max of each BSS + all unassigned interferers individually
+                interference_rssi: list[float] = []
+                for bss_rssi_list in interferer_rssi_by_bss.values():
+                    interference_rssi.append(max(bss_rssi_list))
+                interference_rssi.extend(no_bss_rssi)
 
                 sinr_db = self.propagation_calculator.compute_sinr_db(
                     rssi_dbm, interference_rssi, noise_floor_dbm
+                )
+
+                # Power breakdowns
+                signal_mw = 10.0 ** (rssi_dbm / 10.0)
+                noise_mw  = 10.0 ** (noise_floor_dbm / 10.0)
+                interf_mw = sum(10.0 ** (r / 10.0) for r in interference_rssi)
+
+                # Pure external interference (None when no interferers present)
+                interference_dbm = (
+                    10.0 * math.log10(interf_mw) if interf_mw > 0 else None
+                )
+                # SINR denominator: interference + noise floor
+                total_noise_dbm = 10.0 * math.log10(interf_mw + noise_mw)
+
+                # Energy Detection proxy: signal + interference (no noise floor)
+                total_mw = signal_mw + interf_mw
+                total_rx_power_dbm = (
+                    10.0 * math.log10(total_mw) if total_mw > 0 else rssi_dbm
                 )
 
                 links.append(
@@ -134,26 +177,21 @@ class RelationCalculationService:
                         noise_source=noise_source,
                         snr_db=snr_db,
                         sinr_db=sinr_db,
+                        interference_dbm=interference_dbm,
+                        total_noise_dbm=total_noise_dbm,
+                        total_rx_power_dbm=total_rx_power_dbm,
                         status="paired",
                         note="Selected to peer, same-band enabled link pair",
                     )
                 )
 
-        best_link = max(links, key=lambda link: link.rssi_dbm, default=None)
         return PeerRelationModel(
             peer_device_id=peer_device.id,
             peer_name=peer_device.name,
             peer_type=peer_device.device_type,
             distance_m=distance_m,
             link_count=len(links),
-            best_band=None if best_link is None else best_link.band,
-            best_configured_width_mhz=None if best_link is None else best_link.configured_width_mhz,
-            best_effective_width_mhz=None if best_link is None else best_link.effective_width_mhz,
-            best_rssi_dbm=None if best_link is None else best_link.rssi_dbm,
-            best_noise_floor_dbm=None if best_link is None else best_link.noise_floor_dbm,
-            best_snr_db=None if best_link is None else best_link.snr_db,
-            best_sinr_db=None if best_link is None else best_link.sinr_db,
-            status_summary="No same-band enabled links" if best_link is None else "OK",
+            status_summary="No same-band enabled links" if not links else "OK",
             links=links,
         )
 

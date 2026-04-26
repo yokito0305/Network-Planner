@@ -12,3 +12,4 @@ class DeviceModel:
     x_m: float
     y_m: float
     radio: DeviceRadioModel = field(default_factory=create_default_radio)
+    bss_id: str | None = None

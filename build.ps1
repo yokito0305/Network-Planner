@@ -59,6 +59,7 @@ if (-not $SkipPyInstallerInstall) {
     --workpath "build/pyinstaller" `
     --specpath "build/pyinstaller" `
     --contents-directory "lib" `
+    --add-data "$projectRoot\data\fsr_tables.json;data" `
     "main.py"
 
 $distRoot = Join-Path $projectRoot ("bin_tmp\" + $AppName)

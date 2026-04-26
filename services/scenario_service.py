@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from PySide6.QtCore import QObject, Signal
@@ -9,6 +10,12 @@ from models.scenario import ScenarioModel
 from services.naming_service import NamingService
 from services.scene_transform import SceneTransform
 from services.selection_service import SelectionService
+
+
+def _ap_name_to_bss_id(name: str) -> str | None:
+    """Extract BSS ID from AP name. 'AP-3' → 'BSS3', custom names → None."""
+    m = re.fullmatch(r"AP-(\d+)", name, re.IGNORECASE)
+    return f"BSS{m.group(1)}" if m else None
 
 
 class ScenarioService(QObject):
@@ -89,8 +96,25 @@ class ScenarioService(QObject):
         if device is None:
             return None
         stripped = new_name.strip()
-        if not stripped:
+        if not stripped or stripped == device.name:
             return device
+
+        # Renumber conflict: if new name is already taken by another device of the
+        # same type with a sequential name, swap the two names automatically.
+        pattern = (
+            r"AP-\d+" if device.device_type == DeviceType.AP else r"STA-\d+"
+        )
+        if re.fullmatch(pattern, stripped, re.IGNORECASE):
+            conflict = next(
+                (d for d in self.scenario.devices
+                 if d.id != device_id and d.name == stripped),
+                None,
+            )
+            if conflict is not None:
+                old_name = device.name
+                conflict.name = old_name
+                self.device_updated.emit(conflict)
+
         device.name = stripped
         self.device_updated.emit(device)
         self.summary_changed.emit()
@@ -108,10 +132,33 @@ class ScenarioService(QObject):
                 del self.scenario.devices[index]
                 self.selection_service.set_selected_device_id(None)
                 self.device_removed.emit(device_id)
+
+                # Renumber remaining devices sequentially
+                changed = self.naming_service.renumber_devices(self.scenario.devices)
+                for d in changed:
+                    self.device_updated.emit(d)
+
+                # Clear bss_id on STAs whose BSS no longer has a matching AP
+                valid_bss_ids = self._valid_bss_ids()
+                for d in self.scenario.devices:
+                    if d.bss_id and d.bss_id not in valid_bss_ids:
+                        d.bss_id = None
+                        self.device_updated.emit(d)
+
                 self.summary_changed.emit()
                 return True
         self.selection_service.set_selected_device_id(None)
         return False
+
+    def _valid_bss_ids(self) -> set[str]:
+        """Return the set of BSS IDs that have a corresponding AP by name."""
+        result: set[str] = set()
+        for d in self.scenario.devices:
+            if d.device_type == DeviceType.AP:
+                bss = _ap_name_to_bss_id(d.name)
+                if bss:
+                    result.add(bss)
+        return result
 
     def replace_scenario(self, scenario: ScenarioModel) -> None:
         self.scenario = scenario

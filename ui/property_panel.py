@@ -1,16 +1,18 @@
-"""Property Panel — Phase B + Calculator.
+"""Property Panel — Phase B + Calculator + NS3 Export.
 
-Hosts five tabs:
+Hosts six tabs:
   1. Device Basic  — name, position (unchanged from Phase A)
   2. Wi-Fi / Link  — TX power + per-device link list (Phase B)
   3. Environment   — scene summary + editable propagation params (Phase B)
   4. Relations     — peer / link relation tables (Phase B)
   5. Calculator    — standalone Distance / RSSI / SNR calculator (Phase B-M3)
+  6. NS3 Export    — generate ns-3 OBSS_3BSS-custom experiment parameters
 
 Public API consumed by MainWindow:
-  set_device(device)          — refresh Device Basic + Wi-Fi tabs
+  set_device(device)          — refresh Device Basic, Wi-Fi, and Calculator tabs
   set_relations(snapshot)     — refresh Relations tab
-  set_environment(env)        — refresh Environment tab + Calculator's stored env
+  set_environment(env)        — refresh Environment tab + Calculator stored env
+  set_scenario(devices, env)  — refresh NS3 Export tab
   summary_tab.set_summary()   — update scene summary section
 """
 from PySide6.QtCore import Qt
@@ -28,7 +30,7 @@ from ui.tabs.wifi_link_tab import WifiLinkTab
 
 
 class PropertyPanel(QWidget):
-    """Right-side property panel with five tabbed sections."""
+    """Right-side property panel with six tabbed sections."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -46,7 +48,6 @@ class PropertyPanel(QWidget):
         self.summary_tab = EnvironmentSummaryTab()
         self.relations_tab = RelationsTab()
         self.calculator_tab = CalculatorTab()
-
         self.ns3_export_tab = NS3ExportTab()
 
         self.tabs.addTab(self.device_basic_tab, "Device Basic")
@@ -58,15 +59,16 @@ class PropertyPanel(QWidget):
 
         layout.addWidget(self.tabs)
 
-    # ──────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
     # Public API
-    # ──────────────────────────────────────────────────────────────────────────
+    # -------------------------------------------------------------------------
 
     def set_device(self, device: DeviceModel | None) -> None:
-        """Push device data into Device Basic and Wi-Fi/Link tabs."""
+        """Push device data into Device Basic, Wi-Fi/Link, and Calculator tabs."""
         self.device_basic_tab.set_device(device)
         radio = device.radio if device is not None else None
         self.wifi_tab.set_radio(radio)
+        self.calculator_tab.set_device(device)
 
     def set_relations(self, snapshot: RelationsSnapshotModel | None) -> None:
         """Push a relations snapshot into the Relations tab."""

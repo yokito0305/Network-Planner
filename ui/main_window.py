@@ -23,6 +23,8 @@ from services.scene_transform import SceneTransform
 from services.selection_service import SelectionService
 from storage.json_repository import JsonScenarioRepository
 from ui.dialogs.about_dialog import AboutDialog
+from ui.dialogs.fsr_dict_dialog import FsrDictDialog
+from ui.dialogs.ns3_params_dialog import Ns3ParamsDialog
 from ui.dialogs.shortcuts_dialog import ShortcutsDialog
 from ui.left_palette import LeftPalette
 from ui.property_panel import PropertyPanel
@@ -118,9 +120,14 @@ class MainWindow(QMainWindow):
         view_menu.addAction("Show All Labels").triggered.connect(lambda: self.scene.set_label_mode("all"))
         view_menu.addAction("Hide Labels").triggered.connect(lambda: self.scene.set_label_mode("hidden"))
 
+        tools_menu = self.menuBar().addMenu("Tools")
+        tools_menu.addAction("FSR 字典").triggered.connect(self._show_fsr_dict)
+
         help_menu = self.menuBar().addMenu("Help")
         help_menu.addAction("關於 Network Planner").triggered.connect(self._show_about)
         help_menu.addAction("鍵盤快捷鍵").triggered.connect(self._show_shortcuts)
+        help_menu.addSeparator()
+        help_menu.addAction("NS-3 參數說明").triggered.connect(self._show_ns3_params)
 
     def _wire_events(self) -> None:
         # ── Palette ────────────────────────────────────────────────────────
@@ -153,6 +160,11 @@ class MainWindow(QMainWindow):
         self.scenario_service.device_removed.connect(lambda _id: self._refresh_ns3_export())
         self.scenario_service.device_updated.connect(lambda _d: self._refresh_ns3_export())
         self.scenario_service.scenario_replaced.connect(self._refresh_ns3_export)
+        # Device Basic BSS combo — refresh AP list on any structural change
+        self.scenario_service.device_added.connect(lambda _d: self._refresh_ap_list())
+        self.scenario_service.device_removed.connect(lambda _id: self._refresh_ap_list())
+        self.scenario_service.device_updated.connect(lambda _d: self._refresh_ap_list())
+        self.scenario_service.scenario_replaced.connect(self._refresh_ap_list)
         self.selection_service.selection_changed.connect(
             lambda dev_id: self.left_palette.node_list.set_selected(dev_id)
         )
@@ -167,6 +179,7 @@ class MainWindow(QMainWindow):
         # ── Device Basic tab signals ───────────────────────────────────────
         self.panel.device_basic_tab.name_changed.connect(self._rename_selected_device)
         self.panel.device_basic_tab.position_changed.connect(self._update_selected_device_position)
+        self.panel.device_basic_tab.bss_changed.connect(self._update_selected_device_bss)
 
         # ── Wi-Fi / Link tab signals ───────────────────────────────────────
         self.panel.wifi_tab.tx_power_changed.connect(self._on_tx_power_changed)
@@ -301,6 +314,13 @@ class MainWindow(QMainWindow):
         env = self.scenario_service.scenario.environment
         self.panel.set_scenario(devices, env)
 
+    def _refresh_ap_list(self) -> None:
+        devices = self.scenario_service.list_devices()
+        aps = [d for d in devices if d.device_type == DeviceType.AP]
+        stas = [d for d in devices if d.device_type == DeviceType.STA]
+        self.panel.device_basic_tab.set_ap_list(aps)
+        self.panel.device_basic_tab.set_sta_list(stas)
+
     def _refresh_node_list(self) -> None:
         # Deferred: avoids destroying QTreeWidgetItems while a click event
         # is still being processed (which would cause a segfault).
@@ -353,6 +373,11 @@ class MainWindow(QMainWindow):
         device_id = self.selection_service.selected_device_id
         if device_id is not None:
             self.scenario_service.update_device_position_fields(device_id, x_m, y_m)
+
+    def _update_selected_device_bss(self, bss_id: str) -> None:
+        device_id = self.selection_service.selected_device_id
+        if device_id is not None:
+            self.scenario_service.update_device_bss(device_id, bss_id or None)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Wi-Fi / Link forwarding
@@ -448,8 +473,25 @@ class MainWindow(QMainWindow):
     # Help dialogs
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _show_fsr_dict(self) -> None:
+        if not hasattr(self, '_fsr_dlg') or not self._fsr_dlg.isVisible():
+            self._fsr_dlg = FsrDictDialog(self)
+        device = self.scenario_service.get_device(self.selection_service.selected_device_id)
+        if device is not None and device.radio.links:
+            link = device.radio.links[0]
+            if link.channel_width_mhz is not None:
+                self._fsr_dlg.set_band_width(link.band, link.channel_width_mhz)
+        self._fsr_dlg.show()
+        self._fsr_dlg.raise_()
+
     def _show_about(self) -> None:
         AboutDialog(self).exec()
 
     def _show_shortcuts(self) -> None:
         ShortcutsDialog(self).exec()
+
+    def _show_ns3_params(self) -> None:
+        if not hasattr(self, '_ns3_params_dlg') or not self._ns3_params_dlg.isVisible():
+            self._ns3_params_dlg = Ns3ParamsDialog(self)
+        self._ns3_params_dlg.show()
+        self._ns3_params_dlg.raise_()
