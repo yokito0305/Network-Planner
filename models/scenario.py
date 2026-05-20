@@ -10,3 +10,4 @@ class ScenarioModel:
     height_m: float = 200.0
     devices: list[DeviceModel] = field(default_factory=list)
     environment: EnvironmentModel = field(default_factory=create_default_environment)
+    ns3_export_state: dict | None = None

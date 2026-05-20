@@ -80,24 +80,25 @@ class RelationCalculationService:
                     reference_loss_db=band_profile.reference_loss_db,
                     exponent=scenario.environment.path_loss_exponent,
                 )
+                # peer 發射、selected 接收
                 rssi_dbm = self.propagation_calculator.compute_rssi_dbm(
-                    tx_power_dbm=selected_device.radio.tx_power_dbm,
+                    tx_power_dbm=peer_device.radio.tx_power_dbm,
                     path_loss_db=path_loss_db,
-                    tx_gain_dbi=selected_device.radio.tx_antenna_gain_dbi,
-                    rx_gain_dbi=peer_device.radio.rx_antenna_gain_dbi,
+                    tx_gain_dbi=peer_device.radio.tx_antenna_gain_dbi,
+                    rx_gain_dbi=selected_device.radio.rx_antenna_gain_dbi,
                 )
                 snr_db = self.propagation_calculator.compute_snr_db(rssi_dbm, noise_floor_dbm)
 
-                # ── SINR: BSS-grouped interference at peer_device location ───
-                # For each BSS that differs from peer_device's BSS, find the
+                # ── SINR: BSS-grouped interference at selected_device location ───
+                # For each BSS that differs from selected_device's BSS, find the
                 # single strongest interferer in that BSS, then sum those
                 # per-BSS maximums (in linear mW) as the total interference.
                 #
                 # If BSS IDs are not assigned, fall back to treating every
                 # interferer independently (original behaviour).
-                peer_bss = peer_device.bss_id  # may be None
+                selected_bss = selected_device.bss_id  # may be None
 
-                # Collect per-interferer RSSI at peer_device
+                # Collect per-interferer RSSI at selected_device
                 interferer_rssi_by_bss: dict[str, list[float]] = {}
                 no_bss_rssi: list[float] = []
 
@@ -108,11 +109,11 @@ class RelationCalculationService:
                     ):
                         continue
                     # Skip same-BSS devices — they are signal allies, not interferers
-                    if peer_bss and interferer.bss_id == peer_bss:
+                    if selected_bss and interferer.bss_id == selected_bss:
                         continue
                     dist_i = self.propagation_calculator.compute_distance_m(
                         interferer.x_m, interferer.y_m,
-                        peer_device.x_m, peer_device.y_m,
+                        selected_device.x_m, selected_device.y_m,
                     )
                     pl_i = self.propagation_calculator.compute_path_loss_db(
                         distance_m=dist_i,
@@ -124,7 +125,7 @@ class RelationCalculationService:
                         tx_power_dbm=interferer.radio.tx_power_dbm,
                         path_loss_db=pl_i,
                         tx_gain_dbi=interferer.radio.tx_antenna_gain_dbi,
-                        rx_gain_dbi=peer_device.radio.rx_antenna_gain_dbi,
+                        rx_gain_dbi=selected_device.radio.rx_antenna_gain_dbi,
                     )
                     bss_key = interferer.bss_id
                     if bss_key:
@@ -181,7 +182,7 @@ class RelationCalculationService:
                         total_noise_dbm=total_noise_dbm,
                         total_rx_power_dbm=total_rx_power_dbm,
                         status="paired",
-                        note="Selected to peer, same-band enabled link pair",
+                        note="Peer to selected, same-band enabled link pair",
                     )
                 )
 

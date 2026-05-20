@@ -71,6 +71,9 @@ class ScenarioService(QObject):
             y_m=y_m,
         )
         device.radio.links[0] = link
+        # AP 建立時自動填入 bss_id（AP-1 → BSS1，非標準名稱 → None）
+        if device_type == DeviceType.AP:
+            device.bss_id = _ap_name_to_bss_id(device.name)
         self.scenario.devices.append(device)
         self.selection_service.set_selected_device_id(device.id)
         self.device_added.emit(device)
@@ -113,9 +116,15 @@ class ScenarioService(QObject):
             if conflict is not None:
                 old_name = device.name
                 conflict.name = old_name
+                # 衝突的 AP 改名後同步更新 bss_id
+                if conflict.device_type == DeviceType.AP:
+                    conflict.bss_id = _ap_name_to_bss_id(conflict.name)
                 self.device_updated.emit(conflict)
 
         device.name = stripped
+        # AP 改名後同步更新 bss_id
+        if device.device_type == DeviceType.AP:
+            device.bss_id = _ap_name_to_bss_id(stripped)
         self.device_updated.emit(device)
         self.summary_changed.emit()
         return device
@@ -133,15 +142,39 @@ class ScenarioService(QObject):
                 self.selection_service.set_selected_device_id(None)
                 self.device_removed.emit(device_id)
 
+                # Snapshot AP bss_ids BEFORE renumber so we can build a
+                # remapping table (old_bss_id → new_bss_id) afterwards.
+                ap_old_bss: dict[str, str | None] = {
+                    d.id: d.bss_id
+                    for d in self.scenario.devices
+                    if d.device_type == DeviceType.AP
+                }
+
                 # Renumber remaining devices sequentially
                 changed = self.naming_service.renumber_devices(self.scenario.devices)
+
+                # Build remapping: old AP bss_id → new AP bss_id
+                bss_remap: dict[str, str | None] = {}
+                for d in self.scenario.devices:
+                    if d.device_type == DeviceType.AP:
+                        old_bss = ap_old_bss.get(d.id)
+                        new_bss = _ap_name_to_bss_id(d.name)
+                        d.bss_id = new_bss
+                        if old_bss and old_bss != new_bss:
+                            bss_remap[old_bss] = new_bss
+
                 for d in changed:
                     self.device_updated.emit(d)
 
-                # Clear bss_id on STAs whose BSS no longer has a matching AP
+                # Update STAs: remap bss_id if AP was renumbered, else clear if gone
                 valid_bss_ids = self._valid_bss_ids()
                 for d in self.scenario.devices:
-                    if d.bss_id and d.bss_id not in valid_bss_ids:
+                    if d.device_type != DeviceType.STA or not d.bss_id:
+                        continue
+                    if d.bss_id in bss_remap:
+                        d.bss_id = bss_remap[d.bss_id]
+                        self.device_updated.emit(d)
+                    elif d.bss_id not in valid_bss_ids:
                         d.bss_id = None
                         self.device_updated.emit(d)
 
@@ -160,10 +193,19 @@ class ScenarioService(QObject):
                     result.add(bss)
         return result
 
+    def _sync_ap_bss_ids(self) -> None:
+        """Ensure every AP's bss_id matches its name. Used after replace_scenario
+        to repair old files where AP bss_id was not persisted."""
+        for d in self.scenario.devices:
+            if d.device_type == DeviceType.AP:
+                d.bss_id = _ap_name_to_bss_id(d.name)
+
     def replace_scenario(self, scenario: ScenarioModel) -> None:
         self.scenario = scenario
         self.naming_service.sync_from_devices(self.scenario.devices)
         self.selection_service.set_selected_device_id(None)
+        # 修復舊檔：AP 的 bss_id 可能未被儲存，依名字重建
+        self._sync_ap_bss_ids()
         self.scenario_replaced.emit()
         self.summary_changed.emit()
 
@@ -215,6 +257,13 @@ class ScenarioService(QObject):
         device.radio.tx_power_dbm = tx_power_dbm
         self.device_updated.emit(device)
         return device
+
+    def update_all_devices_tx_power(self, tx_power_dbm: float) -> None:
+        """Set TX power on every device and emit a single scenario_replaced to
+        avoid cascading device_updated signals for each individual device."""
+        for device in self.scenario.devices:
+            device.radio.tx_power_dbm = tx_power_dbm
+        self.scenario_replaced.emit()
 
     def add_device_link(
         self, device_id: str, link: DeviceLinkModel | None = None
@@ -268,3 +317,15 @@ class ScenarioService(QObject):
                 self.device_updated.emit(device)
                 return True
         return False
+
+    def update_device_bss(self, device_id: str, bss_id: str | None) -> None:
+        """Assign or clear the BSS ID of a STA device.
+
+        Emits device_updated so that relation calculations (SINR) are
+        automatically re-run with the updated BSS grouping.
+        """
+        device = self.get_device(device_id)
+        if device is None:
+            return
+        device.bss_id = bss_id
+        self.device_updated.emit(device)

@@ -59,8 +59,6 @@ _DEFAULT_CH_WIDTH: dict[BandId, int] = {
     BandId.BAND_6G:  160,
 }
 
-_NONE_LABEL = "— 未指定 —"
-_BSS_LABELS = ["BSS0", "BSS1", "BSS2"]
 _UNASSIGNED = "未分配"
 
 
@@ -111,9 +109,6 @@ class NS3ExportTab(QWidget):
         self._devices: list[DeviceModel] = []
         self._env: EnvironmentModel | None = None
 
-        # STA BSS assignment: device_id → BSS index (0/1/2) or None
-        self._sta_bss: dict[str, int | None] = {}
-
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -131,13 +126,12 @@ class NS3ExportTab(QWidget):
         bss_form = QFormLayout(bss_grp)
         bss_form.setSpacing(5)
 
-        self._bss_ap_combo: list[QComboBox] = []
+        self._bss_ap_labels: list[QLabel] = []
         for i in range(3):
-            cb = QComboBox()
-            cb.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            cb.currentIndexChanged.connect(self._on_bss_assignment_changed)
-            self._bss_ap_combo.append(cb)
-            bss_form.addRow(f"BSS{i} AP:", cb)
+            lbl = QLabel("—")
+            lbl.setStyleSheet("color:#94A3B8;")
+            self._bss_ap_labels.append(lbl)
+            bss_form.addRow(f"BSS{i} AP:", lbl)
 
         tri_row = QHBoxLayout()
         self._tri_side_spin = _mk_spin(0.1, 9999.0, 20.0, dec=4, suffix=" m")
@@ -154,8 +148,8 @@ class NS3ExportTab(QWidget):
 
         root.addWidget(bss_grp)
 
-        # ── Section 2: STA 歸屬 ──────────────────────────────────────────
-        sta_grp = QGroupBox("📡  STA 歸屬")
+        # ── Section 2: STA 歸屬（唯讀，指派請至 Environment tab）────────
+        sta_grp = QGroupBox("📡  STA 歸屬（唯讀）")
         sta_vbox = QVBoxLayout(sta_grp)
         self._sta_hint = QLabel("（場景中尚無 STA）")
         self._sta_hint.setStyleSheet("color:#64748B; font-size:10px;")
@@ -164,8 +158,8 @@ class NS3ExportTab(QWidget):
         self._sta_rows_layout = QFormLayout(self._sta_rows_widget)
         self._sta_rows_layout.setSpacing(4)
         sta_vbox.addWidget(self._sta_rows_widget)
-        # dict: device_id → QComboBox
-        self._sta_combos: dict[str, QComboBox] = {}
+        # dict: device_id → QLabel (read-only BSS display)
+        self._sta_bss_labels: dict[str, QLabel] = {}
         root.addWidget(sta_grp)
 
         # ── Section 3: 執行參數 ───────────────────────────────────────────
@@ -442,12 +436,140 @@ class NS3ExportTab(QWidget):
         """Called whenever the scene changes."""
         self._devices = list(devices)
         self._env = env
-        self._rebuild_ap_combos()
+        self._rebuild_ap_labels()
         self._rebuild_sta_rows()
         self._rebuild_output()
 
+    def get_state(self) -> dict:
+        """Return a serialisable dict of all user-configurable widget values."""
+        return {
+            # 執行參數
+            "time": self._time_spin.value(),
+            "appStart": self._appstart_spin.value(),
+            "triSide": self._tri_side_spin.value(),
+            "offeredLoad": [le.text() for le in self._load_edits],
+            "mcsIndex": [sp.value() for sp in self._mcs_spins],
+            "giNs": self._gi_combo.currentData(),
+            "nss": self._nss_spin.value(),
+            "linkSteeringMode": self._steering_combo.currentData(),
+            # 進階流量
+            "advEnabled": self._adv_grp.isChecked(),
+            "onTime": self._ontime_edit.text(),
+            "offTime": self._offtime_edit.text(),
+            "onTimeDist": self._ontimedist_combo.currentData(),
+            "offTimeDist": self._offtimedist_combo.currentData(),
+            # Tracing group
+            "traceEnabled": self._trace_grp.isChecked(),
+            "snrTrace": self._cb_snr_trace.isChecked(),
+            "snrDataOnly": self._cb_snr_data_only.isChecked(),
+            "snrTarget": self._sp_snr_target.value(),
+            "snrPerDevice": self._cb_snr_per_dev.isChecked(),
+            "snrPerChannel": self._cb_snr_per_chan.isChecked(),
+            "snrRxModeHist": self._cb_snr_rx_hist.isChecked(),
+            "phyFailureStats": self._cb_phy_fail_stats.isChecked(),
+            "sinrPercentiles": self._cb_sinr_pct.isChecked(),
+            "phyFailureEventLog": self._cb_phy_fail_event.isChecked(),
+            "phyFailureEventLogBss": self._sp_phy_fail_bss.value(),
+            "packetSinrTracker": self._cb_pkt_sinr_tracker.isChecked(),
+            "packetSinrWindowMs": self._sp_pkt_sinr_win_ms.value(),
+            "packetSinrEventLog": self._cb_pkt_sinr_event.isChecked(),
+            "packetSinrWindowCsv": self._cb_pkt_sinr_win_csv.isChecked(),
+            "packetSinrApRawEvent": self._cb_pkt_sinr_ap_raw.isChecked(),
+            # 輸出目錄
+            "outdirSuffix": self._outdir_suffix_edit.text(),
+            "filePrefix": self._file_prefix_edit.text(),
+            "numRuns": self._num_runs_spin.value(),
+            "workers": self._workers_spin.value(),
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Restore all widget values from a previously saved state dict.
+
+        Unknown keys are silently ignored so that old/future state dicts
+        remain compatible.  A single _rebuild_output() is fired at the end
+        instead of one per widget change.
+        """
+        def _set(widget, key: str, setter_name: str = "setValue") -> None:
+            if key in state:
+                widget.blockSignals(True)
+                getattr(widget, setter_name)(state[key])
+                widget.blockSignals(False)
+
+        def _set_text(widget, key: str) -> None:
+            if key in state:
+                widget.blockSignals(True)
+                widget.setText(state[key])
+                widget.blockSignals(False)
+
+        def _set_combo_by_data(combo, key: str) -> None:
+            if key not in state:
+                return
+            combo.blockSignals(True)
+            idx = combo.findData(state[key])
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        # 執行參數
+        _set(self._time_spin, "time")
+        _set(self._appstart_spin, "appStart")
+        _set(self._tri_side_spin, "triSide")
+        if "offeredLoad" in state:
+            for le, val in zip(self._load_edits, state["offeredLoad"]):
+                le.blockSignals(True)
+                le.setText(val)
+                le.blockSignals(False)
+        if "mcsIndex" in state:
+            for sp, val in zip(self._mcs_spins, state["mcsIndex"]):
+                sp.blockSignals(True)
+                sp.setValue(val)
+                sp.blockSignals(False)
+        _set_combo_by_data(self._gi_combo, "giNs")
+        _set(self._nss_spin, "nss")
+        _set_combo_by_data(self._steering_combo, "linkSteeringMode")
+
+        # 進階流量
+        if "advEnabled" in state:
+            self._adv_grp.blockSignals(True)
+            self._adv_grp.setChecked(state["advEnabled"])
+            self._adv_grp.blockSignals(False)
+        _set_text(self._ontime_edit, "onTime")
+        _set_text(self._offtime_edit, "offTime")
+        _set_combo_by_data(self._ontimedist_combo, "onTimeDist")
+        _set_combo_by_data(self._offtimedist_combo, "offTimeDist")
+
+        # Tracing group
+        if "traceEnabled" in state:
+            self._trace_grp.blockSignals(True)
+            self._trace_grp.setChecked(state["traceEnabled"])
+            self._trace_grp.blockSignals(False)
+        _set(self._cb_snr_trace, "snrTrace", "setChecked")
+        _set(self._cb_snr_data_only, "snrDataOnly", "setChecked")
+        _set(self._sp_snr_target, "snrTarget")
+        _set(self._cb_snr_per_dev, "snrPerDevice", "setChecked")
+        _set(self._cb_snr_per_chan, "snrPerChannel", "setChecked")
+        _set(self._cb_snr_rx_hist, "snrRxModeHist", "setChecked")
+        _set(self._cb_phy_fail_stats, "phyFailureStats", "setChecked")
+        _set(self._cb_sinr_pct, "sinrPercentiles", "setChecked")
+        _set(self._cb_phy_fail_event, "phyFailureEventLog", "setChecked")
+        _set(self._sp_phy_fail_bss, "phyFailureEventLogBss")
+        _set(self._cb_pkt_sinr_tracker, "packetSinrTracker", "setChecked")
+        _set(self._sp_pkt_sinr_win_ms, "packetSinrWindowMs")
+        _set(self._cb_pkt_sinr_event, "packetSinrEventLog", "setChecked")
+        _set(self._cb_pkt_sinr_win_csv, "packetSinrWindowCsv", "setChecked")
+        _set(self._cb_pkt_sinr_ap_raw, "packetSinrApRawEvent", "setChecked")
+
+        # 輸出目錄
+        _set_text(self._outdir_suffix_edit, "outdirSuffix")
+        _set_text(self._file_prefix_edit, "filePrefix")
+        _set(self._num_runs_spin, "numRuns")
+        _set(self._workers_spin, "workers")
+
+        # 統一 rebuild 一次
+        self._rebuild_output()
+
     # ──────────────────────────────────────────────────────────────────────────
-    # Internal: rebuild AP combo options
+    # Internal: rebuild display labels
     # ──────────────────────────────────────────────────────────────────────────
 
     def _aps(self) -> list[DeviceModel]:
@@ -456,87 +578,53 @@ class NS3ExportTab(QWidget):
     def _stas(self) -> list[DeviceModel]:
         return [d for d in self._devices if d.device_type == DeviceType.STA]
 
-    def _rebuild_ap_combos(self) -> None:
-        aps = self._aps()
-        # Save current manual selections by device id
-        current_ids: list[str | None] = []
-        for cb in self._bss_ap_combo:
-            data = cb.currentData()
-            current_ids.append(data if isinstance(data, str) else None)
-
-        for cb in self._bss_ap_combo:
-            cb.blockSignals(True)
-            cb.clear()
-            cb.addItem(_NONE_LABEL, None)
-            for ap in aps:
-                cb.addItem(
-                    f"{ap.name}  ({ap.x_m:.2f}, {ap.y_m:.2f})",
-                    ap.id,
-                )
-            cb.blockSignals(False)
-
-        # Auto-select AP from bss_id, fall back to previous manual selection
-        valid_ids = {ap.id for ap in aps}
-        bss_labels = ["BSS0", "BSS1", "BSS2"]
-        for bss_idx, (cb, prev_id) in enumerate(zip(self._bss_ap_combo, current_ids)):
-            # Try to find an AP whose bss_id matches this BSS label
-            auto_ap = next(
-                (ap for ap in aps if (ap.bss_id or "").upper() == bss_labels[bss_idx].upper()),
-                None,
-            )
-            target_id = auto_ap.id if auto_ap else (prev_id if prev_id in valid_ids else None)
-            if target_id:
-                idx = cb.findData(target_id)
-                if idx >= 0:
-                    cb.setCurrentIndex(idx)
-
+    def _rebuild_ap_labels(self) -> None:
+        """Update read-only AP labels: BSS{i} → AP-{i} (derived from AP names)."""
+        for bss in range(3):
+            ap = self._selected_ap_for_bss(bss)
+            lbl = self._bss_ap_labels[bss]
+            if ap is not None:
+                lbl.setText(f"{ap.name}  ({ap.x_m:.2f}, {ap.y_m:.2f})")
+                lbl.setStyleSheet("color:#E2E8F0;")
+            else:
+                lbl.setText("— 未找到 AP")
+                lbl.setStyleSheet("color:#94A3B8;")
         self._update_tri_side_hint()
 
     def _rebuild_sta_rows(self) -> None:
+        """Refresh read-only STA BSS labels from device.bss_id."""
         stas = self._stas()
 
-        # Remove widgets for deleted STAs
-        old_ids = set(self._sta_combos.keys())
+        # Remove labels for deleted STAs
+        old_ids = set(self._sta_bss_labels.keys())
         current_ids = {s.id for s in stas}
         for dev_id in old_ids - current_ids:
-            cb = self._sta_combos.pop(dev_id)
-            # Remove from layout
-            for i in range(self._sta_rows_layout.rowCount() - 1, -1, -1):
-                item = self._sta_rows_layout.itemAt(i, QFormLayout.ItemRole.FieldRole)
-                if item and item.widget() is cb:
-                    self._sta_rows_layout.removeRow(i)
-                    break
-            cb.deleteLater()
-            self._sta_bss.pop(dev_id, None)
+            lbl = self._sta_bss_labels.pop(dev_id)
+            row = self._sta_rows_layout.takeRow(lbl)
+            if row.labelItem:
+                row.labelItem.widget().deleteLater()
+            lbl.deleteLater()
 
-        # Add rows for new STAs
-        existing_ids = set(self._sta_combos.keys())
+        # Add labels for new STAs
+        existing_ids = set(self._sta_bss_labels.keys())
         for sta in stas:
             if sta.id not in existing_ids:
-                cb = QComboBox()
-                cb.addItem(_UNASSIGNED, None)
-                for i, lbl in enumerate(_BSS_LABELS):
-                    cb.addItem(lbl, i)
-                cb.currentIndexChanged.connect(
-                    lambda _idx, did=sta.id: self._on_sta_bss_changed(did)
-                )
-                self._sta_combos[sta.id] = cb
-                self._sta_rows_layout.addRow(f"{sta.name}:", cb)
+                lbl = QLabel()
+                lbl.setStyleSheet("color:#94A3B8;")
+                self._sta_bss_labels[sta.id] = lbl
+                self._sta_rows_layout.addRow(f"{sta.name}:", lbl)
 
-        # Auto-select BSS from device.bss_id (only for newly added or unset combos)
-        bss_label_to_idx = {lbl.upper(): i for i, lbl in enumerate(_BSS_LABELS)}
+        # Update all labels from device.bss_id
         for sta in stas:
-            cb = self._sta_combos.get(sta.id)
-            if cb is None:
+            lbl = self._sta_bss_labels.get(sta.id)
+            if lbl is None:
                 continue
-            # Only auto-set if currently unassigned and device has a bss_id
-            if cb.currentData() is None and sta.bss_id:
-                auto_idx = bss_label_to_idx.get(sta.bss_id.upper())
-                if auto_idx is not None:
-                    cb.blockSignals(True)
-                    cb.setCurrentIndex(auto_idx + 1)  # +1 because index 0 is _UNASSIGNED
-                    cb.blockSignals(False)
-                    self._sta_bss[sta.id] = auto_idx
+            if sta.bss_id:
+                lbl.setText(sta.bss_id)
+                lbl.setStyleSheet("color:#E2E8F0;")
+            else:
+                lbl.setText(_UNASSIGNED)
+                lbl.setStyleSheet("color:#94A3B8;")
 
         # Update visibility hint
         if stas:
@@ -549,18 +637,6 @@ class NS3ExportTab(QWidget):
     # ──────────────────────────────────────────────────────────────────────────
     # Slot handlers
     # ──────────────────────────────────────────────────────────────────────────
-
-    def _on_bss_assignment_changed(self) -> None:
-        self._update_tri_side_hint()
-        self._rebuild_output()
-
-    def _on_sta_bss_changed(self, device_id: str) -> None:
-        cb = self._sta_combos.get(device_id)
-        if cb is None:
-            return
-        val = cb.currentData()
-        self._sta_bss[device_id] = val  # int or None
-        self._rebuild_output()
 
     def _update_tri_side_hint(self) -> None:
         """Auto-fill triSide with average AP distance as a hint."""
@@ -585,12 +661,10 @@ class NS3ExportTab(QWidget):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _selected_ap_for_bss(self, bss: int) -> DeviceModel | None:
-        cb = self._bss_ap_combo[bss]
-        dev_id = cb.currentData()
-        if not dev_id:
-            return None
+        """Find the AP whose name matches AP-{bss} (auto-derived from naming convention)."""
+        target_name = f"AP-{bss}"
         for d in self._devices:
-            if d.id == dev_id and d.device_type == DeviceType.AP:
+            if d.device_type == DeviceType.AP and d.name == target_name:
                 return d
         return None
 
@@ -602,16 +676,14 @@ class NS3ExportTab(QWidget):
         return result
 
     def _sta_polar_for_bss(self, bss: int) -> str | None:
-        """Return 'dist@angle,...' string for all STAs assigned to this BSS."""
+        """Return 'dist@angle,...' string for all STAs assigned to this BSS via device.bss_id."""
         ap = self._selected_ap_for_bss(bss)
         if ap is None:
             return None
+        target_bss_id = f"BSS{bss}"
         specs: list[str] = []
         for sta in self._stas():
-            assigned = self._sta_combos.get(sta.id)
-            if assigned is None:
-                continue
-            if assigned.currentData() != bss:
+            if (sta.bss_id or "").upper() != target_bss_id.upper():
                 continue
             d = _dist(ap.x_m, ap.y_m, sta.x_m, sta.y_m)
             a = _angle_deg(ap.x_m, ap.y_m, sta.x_m, sta.y_m)
@@ -695,14 +767,6 @@ class NS3ExportTab(QWidget):
             else:
                 ap_xy.append(f"apXyBss{bss}={ap.x_m:.4f}:{ap.y_m:.4f}")
 
-        # Check for duplicate AP assignment
-        selected_ids = [
-            self._bss_ap_combo[i].currentData() for i in range(3)
-        ]
-        valid_selected = [x for x in selected_ids if x is not None]
-        if len(valid_selected) != len(set(valid_selected)):
-            warnings.append("同一個 AP 被指派給多個 BSS，請重新檢查。")
-
         sta_polar: list[str] = []
         for bss in range(3):
             polar = self._sta_polar_for_bss(bss)
@@ -715,11 +779,7 @@ class NS3ExportTab(QWidget):
                 sta_polar.append(f"staPolarBss{bss}={polar}")
 
         # Warn about unassigned STAs
-        unassigned_stas = []
-        for sta in self._stas():
-            cb = self._sta_combos.get(sta.id)
-            if cb is None or cb.currentData() is None:
-                unassigned_stas.append(sta.name)
+        unassigned_stas = [sta.name for sta in self._stas() if not sta.bss_id]
         if unassigned_stas:
             warnings.append(f"以下 STA 尚未分配 BSS：{', '.join(unassigned_stas)}")
 

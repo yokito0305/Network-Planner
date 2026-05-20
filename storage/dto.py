@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from models.device import DeviceModel
 from models.environment import (
@@ -13,7 +14,7 @@ from models.radio import DeviceLinkModel, DeviceRadioModel, create_default_link,
 from models.scenario import ScenarioModel
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(slots=True)
@@ -136,6 +137,7 @@ class DeviceDTO:
     x_m: float
     y_m: float
     radio: DeviceRadioDTO
+    bss_id: str | None = None
 
     @classmethod
     def from_model(cls, model: DeviceModel) -> "DeviceDTO":
@@ -146,6 +148,7 @@ class DeviceDTO:
             x_m=model.x_m,
             y_m=model.y_m,
             radio=DeviceRadioDTO.from_model(model.radio),
+            bss_id=model.bss_id,
         )
 
     def to_model(self) -> DeviceModel:
@@ -156,6 +159,7 @@ class DeviceDTO:
             x_m=self.x_m,
             y_m=self.y_m,
             radio=self.radio.to_model(),
+            bss_id=self.bss_id,
         )
 
 
@@ -165,6 +169,7 @@ class ScenarioDTO:
     height_m: float
     devices: list[DeviceDTO]
     environment: EnvironmentDTO
+    ns3_export_state: dict | None = None
 
     @classmethod
     def from_model(cls, model: ScenarioModel) -> "ScenarioDTO":
@@ -173,6 +178,7 @@ class ScenarioDTO:
             height_m=model.height_m,
             devices=[DeviceDTO.from_model(device) for device in model.devices],
             environment=EnvironmentDTO.from_model(model.environment),
+            ns3_export_state=model.ns3_export_state,
         )
 
     def to_model(self) -> ScenarioModel:
@@ -181,10 +187,13 @@ class ScenarioDTO:
             height_m=self.height_m,
             devices=[device.to_model() for device in self.devices],
             environment=self.environment.to_model(),
+            ns3_export_state=self.ns3_export_state,
         )
 
     def to_payload(self) -> dict:
-        return {
+        # Build device list — use asdict but inject bss_id manually since
+        # asdict on slots dataclass includes all fields automatically.
+        payload: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "scenario": {
                 "width_m": self.width_m,
@@ -193,25 +202,32 @@ class ScenarioDTO:
                 "environment": asdict(self.environment),
             },
         }
+        if self.ns3_export_state is not None:
+            payload["ns3_export"] = self.ns3_export_state
+        return payload
 
     @classmethod
     def from_payload(cls, payload: dict) -> tuple[int, "ScenarioDTO"]:
         schema_version = int(payload["schema_version"])
         scenario = payload["scenario"]
+        ns3_export_state: dict | None = payload.get("ns3_export")
+
         if schema_version == 1:
             return schema_version, cls(
                 width_m=float(scenario["width_m"]),
                 height_m=float(scenario["height_m"]),
                 devices=[cls._device_dto_from_payload_v1(device_payload) for device_payload in scenario["devices"]],
                 environment=EnvironmentDTO.from_model(create_default_environment()),
+                ns3_export_state=None,
             )
-        if schema_version not in (2, 3):
+        if schema_version not in (2, 3, 4):
             raise ValueError(f"Unsupported schema version: {schema_version}")
         return schema_version, cls(
             width_m=float(scenario["width_m"]),
             height_m=float(scenario["height_m"]),
             devices=[cls._device_dto_from_payload_v2(device_payload) for device_payload in scenario["devices"]],
             environment=cls._environment_dto_from_payload(scenario.get("environment"), schema_version),
+            ns3_export_state=ns3_export_state,
         )
 
     @staticmethod
@@ -223,6 +239,7 @@ class ScenarioDTO:
             x_m=float(device_payload["x_m"]),
             y_m=float(device_payload["y_m"]),
             radio=DeviceRadioDTO.from_model(create_default_radio()),
+            bss_id=None,
         )
 
     @staticmethod
@@ -239,6 +256,7 @@ class ScenarioDTO:
                 if radio_payload is None
                 else ScenarioDTO._radio_dto_from_payload(radio_payload)
             ),
+            bss_id=device_payload.get("bss_id"),  # None for v2/v3 old files
         )
 
     @staticmethod

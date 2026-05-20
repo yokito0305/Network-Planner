@@ -156,7 +156,7 @@ class NodeListPanel(QWidget):
             child.setData(0, Qt.ItemDataRole.UserRole, device.id)
             child.setToolTip(
                 0,
-                f"{device.device_type.value}  ({device.x_m:.1f}, {device.y_m:.1f})",
+                f"{device.device_type.value}  ({device.x_m:.2f}, {device.y_m:.2f})",
             )
 
         self._ap_group.setText(0, f"AP ({ap_count})")

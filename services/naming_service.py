@@ -6,14 +6,14 @@ from models.enums import DeviceType
 
 class NamingService:
     def __init__(self) -> None:
-        self._counters: dict[DeviceType, int] = defaultdict(int)
+        self._counters: dict[DeviceType, int] = defaultdict(lambda: -1)
 
     def next_name(self, device_type: DeviceType) -> str:
         self._counters[device_type] += 1
         return f"{device_type.value}-{self._counters[device_type]}"
 
     def sync_from_devices(self, devices: list[DeviceModel]) -> None:
-        self._counters = defaultdict(int)
+        self._counters = defaultdict(lambda: -1)
         for device in devices:
             prefix = f"{device.device_type.value}-"
             if device.name.startswith(prefix):
@@ -25,14 +25,14 @@ class NamingService:
                     )
 
     def renumber_devices(self, devices: list[DeviceModel]) -> list[DeviceModel]:
-        """Renumber all devices of each type sequentially (AP-1, AP-2, ...).
+        """Renumber all devices of each type sequentially (AP-0, AP-1, ...).
 
         Only renames devices whose name matches the auto-generated pattern
         "{Type}-{n}". Custom names (e.g. "Gateway") are left unchanged.
 
         Returns the list of devices whose names were actually changed.
         """
-        counters: dict[DeviceType, int] = defaultdict(int)
+        counters: dict[DeviceType, int] = defaultdict(lambda: -1)
         changed: list[DeviceModel] = []
 
         for device in devices:

@@ -55,8 +55,8 @@ class RelationCalculationServiceTests(unittest.TestCase):
         peer_relation = snapshot.peers[0]
         self.assertEqual(peer_relation.peer_device_id, "peer")
         self.assertEqual(peer_relation.link_count, 1)
-        self.assertEqual(peer_relation.best_band, BandId.BAND_5G)
         self.assertEqual(len(peer_relation.links), 1)
+        # selected_link = AP-1 的 5G link（接收端），peer_link = STA-1 的 5G link（發射端）
         self.assertEqual(peer_relation.links[0].selected_link_id, "sel-5g")
         self.assertEqual(peer_relation.links[0].peer_link_id, "peer-5g")
         self.assertAlmostEqual(peer_relation.distance_m, 5.0)

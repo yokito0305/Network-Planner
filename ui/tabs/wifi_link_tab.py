@@ -29,6 +29,7 @@ BAND_DISPLAY: dict[BandId, str] = {
 
 class WifiLinkTab(QWidget):
     tx_power_changed = Signal(float)
+    apply_tx_power_to_all = Signal(float)
     link_added = Signal()
     link_removed = Signal(str)
     link_name_changed = Signal(str, str)
@@ -51,6 +52,16 @@ class WifiLinkTab(QWidget):
         self._tx_spin.setSuffix(" dBm")
         self._tx_spin.setToolTip("Transmit power in dBm")
         power_form.addRow("TX Power:", self._tx_spin)
+
+        btn_row = QHBoxLayout()
+        self._btn_apply_current = QPushButton("套用至當前裝置")
+        self._btn_apply_current.setToolTip("將此 TX Power 套用至目前選擇的裝置")
+        self._btn_apply_all = QPushButton("套用至全部裝置")
+        self._btn_apply_all.setToolTip("將此 TX Power 套用至場景中的所有裝置")
+        btn_row.addWidget(self._btn_apply_current)
+        btn_row.addWidget(self._btn_apply_all)
+        power_form.addRow(btn_row)
+
         root.addWidget(power_group)
 
         link_group = QGroupBox("Links")
@@ -78,6 +89,12 @@ class WifiLinkTab(QWidget):
 
         self._blocked = False
         self._tx_spin.editingFinished.connect(self._on_tx_editing_finished)
+        self._btn_apply_current.clicked.connect(
+            lambda: self.tx_power_changed.emit(self._tx_spin.value())
+        )
+        self._btn_apply_all.clicked.connect(
+            lambda: self.apply_tx_power_to_all.emit(self._tx_spin.value())
+        )
         self._set_no_device()
 
     def set_radio(self, radio: DeviceRadioModel | None) -> None:
@@ -88,6 +105,8 @@ class WifiLinkTab(QWidget):
                 return
             self._tx_spin.setEnabled(True)
             self._tx_spin.setValue(radio.tx_power_dbm)
+            self._btn_apply_current.setEnabled(True)
+            self._btn_apply_all.setEnabled(True)
             self._rebuild_table(radio.links)
         finally:
             self._blocked = False
@@ -95,6 +114,8 @@ class WifiLinkTab(QWidget):
     def _set_no_device(self) -> None:
         self._tx_spin.setValue(0.0)
         self._tx_spin.setEnabled(False)
+        self._btn_apply_current.setEnabled(False)
+        self._btn_apply_all.setEnabled(False)
         self._table.setRowCount(0)
 
     def _rebuild_table(self, links: list[DeviceLinkModel]) -> None:

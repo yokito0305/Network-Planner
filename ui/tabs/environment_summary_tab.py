@@ -11,6 +11,7 @@ Backward-compatible API:
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -29,6 +30,7 @@ class EnvironmentSummaryTab(QWidget):
     reference_distance_changed = Signal(float)
     manual_noise_floor_override_changed = Signal(object)
     rx_noise_figure_changed = Signal(float)
+    sta_bss_changed = Signal(str, object)   # device_id, bss_id (str or None)
 
     def __init__(self) -> None:
         super().__init__()
@@ -116,6 +118,14 @@ class EnvironmentSummaryTab(QWidget):
         band_form.addRow("6 GHz Manual NF:", self._nf_6g_label)
 
         root.addWidget(band_group)
+
+        # ── STA BSS 指派 ──────────────────────────────────────────────────────
+        self._bss_group = QGroupBox("STA BSS 指派")
+        self._bss_layout = QFormLayout(self._bss_group)
+        self._sta_bss_combos: dict[str, QComboBox] = {}   # device_id → combo
+        self._bss_options: list[str] = []                 # ["BSS0", "BSS1", ...]
+        root.addWidget(self._bss_group)
+
         root.addStretch(1)
 
         self._blocked = False
@@ -132,7 +142,7 @@ class EnvironmentSummaryTab(QWidget):
         )
 
     def set_summary(self, width_m: float, height_m: float, ap_count: int, sta_count: int) -> None:
-        self.scene_size.setText(f"{width_m:.1f} m x {height_m:.1f} m")
+        self.scene_size.setText(f"{width_m:.2f} m x {height_m:.2f} m")
         self.ap_count.setText(str(ap_count))
         self.sta_count.setText(str(sta_count))
         self.total_count.setText(str(ap_count + sta_count))
@@ -174,6 +184,81 @@ class EnvironmentSummaryTab(QWidget):
                     self._nf_6g_label.setText(manual_nf_text)
         finally:
             self._blocked = False
+
+    def refresh_sta_bss_panel(
+        self,
+        stas: list,          # list[DeviceModel]
+        aps: list,           # list[DeviceModel]
+    ) -> None:
+        """Rebuild STA BSS assignment combos. Preserve existing selections."""
+        import re
+
+        def _ap_to_bss(name: str) -> str | None:
+            m = re.fullmatch(r"AP-(\d+)", name, re.IGNORECASE)
+            return f"BSS{m.group(1)}" if m else None
+
+        # Build BSS option list from APs
+        self._bss_options = []
+        for ap in aps:
+            bss = _ap_to_bss(ap.name)
+            if bss and bss not in self._bss_options:
+                self._bss_options.append(bss)
+        self._bss_options.sort()
+
+        # Remove combos for STAs no longer in scene
+        existing_ids = {sta.id for sta in stas}
+        for dev_id in list(self._sta_bss_combos.keys()):
+            if dev_id not in existing_ids:
+                cb = self._sta_bss_combos.pop(dev_id)
+                # Remove from layout by finding its row
+                for row in range(self._bss_layout.rowCount()):
+                    item = self._bss_layout.itemAt(row, QFormLayout.ItemRole.FieldRole)
+                    if item and item.widget() is cb:
+                        self._bss_layout.removeRow(row)
+                        break
+
+        # Add or update combos for each STA
+        for sta in stas:
+            if sta.id not in self._sta_bss_combos:
+                cb = QComboBox()
+                cb.addItem("-- 未指派 --", None)
+                for bss in self._bss_options:
+                    cb.addItem(bss, bss)
+                cb.setCurrentIndex(0)
+                if sta.bss_id:
+                    idx = cb.findData(sta.bss_id)
+                    if idx >= 0:
+                        cb.setCurrentIndex(idx)
+                self._sta_bss_combos[sta.id] = cb
+                self._bss_layout.addRow(f"{sta.name}:", cb)
+                cb.currentIndexChanged.connect(
+                    lambda _i, did=sta.id: self._on_sta_bss_combo_changed(did)
+                )
+            else:
+                cb = self._sta_bss_combos[sta.id]
+                # Update label in case name changed
+                row_label = self._bss_layout.labelForField(cb)
+                if row_label:
+                    row_label.setText(f"{sta.name}:")
+                # Rebuild options if AP list changed
+                current_data = cb.currentData()
+                cb.blockSignals(True)
+                cb.clear()
+                cb.addItem("-- 未指派 --", None)
+                for bss in self._bss_options:
+                    cb.addItem(bss, bss)
+                # Prefer device's stored bss_id, fallback to previous selection
+                target = sta.bss_id or current_data
+                idx = cb.findData(target) if target else -1
+                cb.setCurrentIndex(idx if idx >= 0 else 0)
+                cb.blockSignals(False)
+
+    def _on_sta_bss_combo_changed(self, device_id: str) -> None:
+        cb = self._sta_bss_combos.get(device_id)
+        if cb is None:
+            return
+        bss_id = cb.currentData()   # str or None
+        self.sta_bss_changed.emit(device_id, bss_id)
 
     def _emit_if_unblocked(self, signal: Signal, value: float) -> None:
         if not self._blocked:

@@ -48,11 +48,11 @@ def _band_str(band: BandId | None) -> str:
 
 
 def _fmt_dbm(value: float | None) -> str:
-    return f"{value:.1f} dBm" if value is not None else "—"
+    return f"{value:.2f} dBm" if value is not None else "—"
 
 
 def _fmt_db(value: float | None) -> str:
-    return f"{value:.1f} dB" if value is not None else "—"
+    return f"{value:.2f} dB" if value is not None else "—"
 
 
 def _fmt_width(value: int | None) -> str:
@@ -242,7 +242,9 @@ class RelationsTab(QWidget):
         self._mcs_table.verticalHeader().setVisible(False)
         self._mcs_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._mcs_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self._mcs_table.setFixedHeight(52)
+        self._mcs_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._mcs_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._mcs_table.setFixedHeight(70)
         mcs_layout.addWidget(self._mcs_table)
 
         self._mcs_rec_label = QLabel("")
@@ -380,7 +382,7 @@ class RelationsTab(QWidget):
                 self._link_table.setItem(r, _L_SEL_LINK,     _ro_item(lnk.selected_link_name, L))
                 self._link_table.setItem(r, _L_PEER_LINK,    _ro_item(lnk.peer_link_name, L))
                 self._link_table.setItem(r, _L_WIDTH,        _ro_item(_fmt_width(lnk.configured_width_mhz)))
-                self._link_table.setItem(r, _L_PL,           _ro_item(f"{lnk.path_loss_db:.1f} dB"))
+                self._link_table.setItem(r, _L_PL,           _ro_item(f"{lnk.path_loss_db:.2f} dB"))
                 self._link_table.setItem(r, _L_RSSI,         _ro_item(_fmt_dbm(lnk.rssi_dbm)))
                 self._link_table.setItem(r, _L_NOISE,        _ro_item(_fmt_dbm(lnk.noise_floor_dbm)))
                 self._link_table.setItem(r, _L_NOISE_SOURCE, _ro_item(lnk.noise_source))
@@ -411,20 +413,20 @@ class RelationsTab(QWidget):
         width = link.effective_width_mhz
 
         self._mcs_basis_label.setText(
-            f"基於 SINR = {sinr:.1f} dB  ({_band_str(band)} {_fmt_width(width)})"
+            f"基於 SINR = {sinr:.2f} dB  ({_band_str(band)} {_fmt_width(width)})"
         )
 
         fsr_list = all_mcs_fsr(band, width, sinr)
         self._mcs_table.setRowCount(1)
         for col, fsr in enumerate(fsr_list):
-            pct = f"{fsr * 100:.1f}%"
+            pct = f"{fsr * 100:.2f}%"
             self._mcs_table.setItem(0, col, _ro_item(pct))
 
         # Best = highest MCS index among all MCS sharing the maximum FSR
         max_fsr = max(fsr_list)
         best_mcs = max(i for i, f in enumerate(fsr_list) if f == max_fsr)
         self._mcs_rec_label.setText(
-            f"推薦 MCS {best_mcs}  （FSR {max_fsr * 100:.1f}%）"
+            f"推薦 MCS {best_mcs}  （FSR {max_fsr * 100:.2f}%）"
         )
 
     def _refresh_peer_row_rf(self, peer_idx: int) -> None:

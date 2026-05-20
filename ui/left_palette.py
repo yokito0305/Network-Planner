@@ -1,9 +1,16 @@
 from PySide6.QtCore import QMimeData, QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QDrag, QMouseEvent, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from models.enums import DeviceType
 from ui.node_list_panel import NodeListPanel
+from ui.tabs.deployment_tab import DeploymentTab
 
 
 class PaletteButton(QLabel):
@@ -83,23 +90,38 @@ class LeftPalette(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        title = QLabel("Palette")
-        layout.addWidget(title)
+        self._tabs = QTabWidget()
+        self._tabs.setTabPosition(QTabWidget.TabPosition.North)
+        root_layout.addWidget(self._tabs)
+
+        # ── Tab 1: Palette + Node List ─────────────────────────────────────
+        tab1 = QWidget()
+        t1_layout = QVBoxLayout(tab1)
+        t1_layout.setContentsMargins(8, 8, 8, 8)
+        t1_layout.setSpacing(8)
 
         for device_type in (DeviceType.AP, DeviceType.STA):
             button = PaletteButton(device_type)
-            button.setToolTip(f"Click to add {device_type.value} at viewport center, or drag into the canvas.")
+            button.setToolTip(
+                f"Click to add {device_type.value} at viewport center, "
+                "or drag into the canvas."
+            )
             button.activated.connect(self.add_requested.emit)
-            layout.addWidget(button)
+            t1_layout.addWidget(button)
 
         hint = QLabel("Click to add at viewport center.\nDrag into canvas to place directly.")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        t1_layout.addWidget(hint)
 
-        # ── Node list (lower section) ──────────────────────────────────────
         self.node_list = NodeListPanel()
-        layout.addWidget(self.node_list, stretch=1)
+        t1_layout.addWidget(self.node_list, stretch=1)
+
+        self._tabs.addTab(tab1, "裝置")
+
+        # ── Tab 2: Deployment ──────────────────────────────────────────────
+        self.deployment_tab = DeploymentTab()
+        self._tabs.addTab(self.deployment_tab, "部署")

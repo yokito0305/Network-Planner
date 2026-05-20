@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QMainWindow, QMe
 from graphics.planner_scene import PlannerScene
 from graphics.planner_view import PlannerView
 from models.enums import BandId, DeviceType
+from models.scenario import ScenarioModel
 from services.propagation_calculator import PropagationCalculator
 from services.relation_calculation_service import RelationCalculationService
 from services.scenario_service import ScenarioService
@@ -102,6 +103,8 @@ class MainWindow(QMainWindow):
         self._refresh_environment()
         self._refresh_relations()
         self._refresh_node_list()
+        self._refresh_deployment()
+        self._refresh_sta_bss_panel()
         QTimer.singleShot(0, self.view.fit_scene_in_view)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -110,6 +113,8 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
+        file_menu.addAction("New").triggered.connect(self._new)
+        file_menu.addSeparator()
         file_menu.addAction("Save...").triggered.connect(self._save)
         file_menu.addAction("Load...").triggered.connect(self._load)
 
@@ -136,6 +141,9 @@ class MainWindow(QMainWindow):
             self.selection_service.set_selected_device_id
         )
         self.left_palette.node_list.lock_toggled.connect(self._on_lock_toggled)
+
+        # ── Deployment tab ─────────────────────────────────────────────────
+        self.left_palette.deployment_tab.move_requested.connect(self._on_deployment_move)
 
         # ── Selection changes → refresh device panel + relations ───────────
         self.selection_service.selection_changed.connect(
@@ -165,8 +173,21 @@ class MainWindow(QMainWindow):
         self.scenario_service.device_removed.connect(lambda _id: self._refresh_ap_list())
         self.scenario_service.device_updated.connect(lambda _d: self._refresh_ap_list())
         self.scenario_service.scenario_replaced.connect(self._refresh_ap_list)
+        # Deployment tab — refresh device list on any structural change
+        self.scenario_service.device_added.connect(lambda _d: self._refresh_deployment())
+        self.scenario_service.device_removed.connect(lambda _id: self._refresh_deployment())
+        self.scenario_service.device_updated.connect(lambda d: self.left_palette.deployment_tab.on_device_updated(d))
+        self.scenario_service.scenario_replaced.connect(self._refresh_deployment)
+        # STA BSS panel — refresh on structural changes
+        self.scenario_service.device_added.connect(lambda _d: self._refresh_sta_bss_panel())
+        self.scenario_service.device_removed.connect(lambda _id: self._refresh_sta_bss_panel())
+        self.scenario_service.device_updated.connect(lambda _d: self._refresh_sta_bss_panel())
+        self.scenario_service.scenario_replaced.connect(self._refresh_sta_bss_panel)
         self.selection_service.selection_changed.connect(
             lambda dev_id: self.left_palette.node_list.set_selected(dev_id)
+        )
+        self.selection_service.selection_changed.connect(
+            lambda dev_id: self.left_palette.deployment_tab.set_selected_device(dev_id)
         )
 
         # ── Scenario replaced → full refresh ───────────────────────────────
@@ -179,10 +200,9 @@ class MainWindow(QMainWindow):
         # ── Device Basic tab signals ───────────────────────────────────────
         self.panel.device_basic_tab.name_changed.connect(self._rename_selected_device)
         self.panel.device_basic_tab.position_changed.connect(self._update_selected_device_position)
-        self.panel.device_basic_tab.bss_changed.connect(self._update_selected_device_bss)
-
         # ── Wi-Fi / Link tab signals ───────────────────────────────────────
         self.panel.wifi_tab.tx_power_changed.connect(self._on_tx_power_changed)
+        self.panel.wifi_tab.apply_tx_power_to_all.connect(self._on_apply_tx_power_to_all)
         self.panel.wifi_tab.link_added.connect(self._on_link_added)
         self.panel.wifi_tab.link_removed.connect(self._on_link_removed)
         self.panel.wifi_tab.link_name_changed.connect(self._on_link_name_changed)
@@ -207,6 +227,7 @@ class MainWindow(QMainWindow):
         self.panel.summary_tab.rx_noise_figure_changed.connect(
             self.scenario_service.set_rx_noise_figure_db
         )
+        self.panel.summary_tab.sta_bss_changed.connect(self._on_sta_bss_changed)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Event handlers (orchestrate refreshes)
@@ -321,6 +342,26 @@ class MainWindow(QMainWindow):
         self.panel.device_basic_tab.set_ap_list(aps)
         self.panel.device_basic_tab.set_sta_list(stas)
 
+    def _refresh_deployment(self) -> None:
+        import math
+        devices = self.scenario_service.list_devices()
+        scenario = self.scenario_service.scenario
+        diagonal = math.hypot(scenario.width_m, scenario.height_m)
+        self.left_palette.deployment_tab.set_scene_diagonal(diagonal)
+        self.left_palette.deployment_tab.refresh_devices(devices)
+
+    def _refresh_sta_bss_panel(self) -> None:
+        devices = self.scenario_service.list_devices()
+        stas = [d for d in devices if d.device_type == DeviceType.STA]
+        aps  = [d for d in devices if d.device_type == DeviceType.AP]
+        self.panel.summary_tab.refresh_sta_bss_panel(stas, aps)
+
+    def _on_sta_bss_changed(self, device_id: str, bss_id: object) -> None:
+        self.scenario_service.update_device_bss(device_id, bss_id or None)
+
+    def _on_deployment_move(self, device_id: str, x_m: float, y_m: float) -> None:
+        self.scenario_service.move_device(device_id, x_m, y_m)
+
     def _refresh_node_list(self) -> None:
         # Deferred: avoids destroying QTreeWidgetItems while a click event
         # is still being processed (which would cause a segfault).
@@ -374,11 +415,6 @@ class MainWindow(QMainWindow):
         if device_id is not None:
             self.scenario_service.update_device_position_fields(device_id, x_m, y_m)
 
-    def _update_selected_device_bss(self, bss_id: str) -> None:
-        device_id = self.selection_service.selected_device_id
-        if device_id is not None:
-            self.scenario_service.update_device_bss(device_id, bss_id or None)
-
     # ──────────────────────────────────────────────────────────────────────────
     # Wi-Fi / Link forwarding
     # ──────────────────────────────────────────────────────────────────────────
@@ -387,6 +423,9 @@ class MainWindow(QMainWindow):
         device_id = self.selection_service.selected_device_id
         if device_id is not None:
             self.scenario_service.update_device_tx_power(device_id, value)
+
+    def _on_apply_tx_power_to_all(self, value: float) -> None:
+        self.scenario_service.update_all_devices_tx_power(value)
 
     def _on_link_added(self) -> None:
         device_id = self.selection_service.selected_device_id
@@ -451,9 +490,27 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save Scenario", "", "JSON Files (*.json)")
         if not path:
             return
+        # 存檔前先把 NS3 Export tab 的 UI 狀態存入 scenario
+        self.scenario_service.scenario.ns3_export_state = (
+            self.panel.ns3_export_tab.get_state()
+        )
         self.repository.save(path, self.scenario_service.scenario)
         self._current_path = Path(path)
         self.statusBar().showMessage(f"Saved to {path}", 3000)
+
+    def _new(self) -> None:
+        reply = QMessageBox.question(
+            self, "New Scenario", "建立新場景？目前未儲存的變更將會遺失。",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Ok:
+            return
+        self.scenario_service.replace_scenario(ScenarioModel())
+        # 清空 NS3 Export tab 回預設值
+        self.panel.ns3_export_tab.set_state({})
+        self._current_path = None
+        self.view.fit_scene_in_view()
+        self.statusBar().showMessage("New scenario created", 3000)
 
     def _load(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load Scenario", "", "JSON Files (*.json)")
@@ -465,6 +522,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load Failed", f"Could not load scenario:\n{exc}")
             return
         self.scenario_service.replace_scenario(scenario)
+        # 還原 NS3 Export tab 的 UI 狀態（無狀態時傳空 dict 保持預設值）
+        self.panel.ns3_export_tab.set_state(scenario.ns3_export_state or {})
         self.view.fit_scene_in_view()
         self._current_path = Path(path)
         self.statusBar().showMessage(f"Loaded schema v{schema_version} from {path}", 3000)
